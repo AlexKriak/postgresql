@@ -5,7 +5,7 @@ from psycopg import Connection
 
 DB_NAME: Final[str] = "inventorydb"
 DB_USER: Final[str] = "app_user"
-DB_PASSWORD: Final[str] = "example"
+DB_PASSWORD: Final[str] = "example"     #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
 DB_HOST: Final[str] = "127.0.0.1"
 DB_PORT: Final[int] = 5432
 
