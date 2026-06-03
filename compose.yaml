@@ -11,3 +11,4 @@ services:
       - ./postgresql_data:/var/lib/postgresql
     environment:
       POSTGRES_PASSWORD: example
+
