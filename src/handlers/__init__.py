@@ -1,5 +1,6 @@
 import importlib
 from pathlib import Path, PurePath
+from . import general, warehouses, products, product_categories
 
 package_dir = Path(__file__).parent
 
