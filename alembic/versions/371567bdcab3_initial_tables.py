@@ -10,7 +10,6 @@ from enum import Enum
 from alembic import op
 import sqlalchemy as sa
 
-
 # revision identifiers, used by Alembic.
 revision: str = '371567bdcab3'
 down_revision: Union[str, Sequence[str], None] = None
@@ -20,81 +19,99 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # Создание схемы catalog и sales, если не существует
-    op.execute(sa.text("CREATE SCHEMA IF NOT EXISTS catalog;"))
-    op.execute(sa.text("CREATE SCHEMA IF NOT EXISTS sales;"))
+    op.execute("CREATE SCHEMA IF NOT EXISTS catalog;")
+    op.execute("CREATE SCHEMA IF NOT EXISTS sales;")
 
     # Создание таблицы product_categories
-    op.create_table(
-        'product_categories',
-        sa.Column('id', sa.Integer, primary_key=True, autoincrement=True),
-        sa.Column('name', sa.String(length=255), nullable=False, unique=True),
-        schema='catalog'
+    op.execute(
+        "CREATE TABLE catalog.product_categories (id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL UNIQUE)"
     )
 
     # Создание таблицы warehouses
-    op.create_table(
-        'warehouses',
-        sa.Column('id', sa.Integer, primary_key=True, autoincrement=True),
-        sa.Column('city', sa.String(length=255), nullable=False),
-        sa.Column('address', sa.Text, nullable=False),
-        sa.Column('label', sa.Text, nullable=True),
-        sa.Column('is_central', sa.Boolean, nullable=False, default=False),
-        schema='catalog'
+    op.execute(
+        "CREATE TABLE catalog.warehouses ("
+        "id SERIAL PRIMARY KEY, "
+        "city VARCHAR(255) NOT NULL, "
+        "address TEXT NOT NULL, "
+        "label TEXT, "
+        "is_central BOOLEAN NOT NULL DEFAULT FALSE"
+        ")"
     )
 
     # Создание таблицы products
-    op.create_table(
-        'products',
-        sa.Column('id', sa.Integer, primary_key=True, autoincrement=True),
-        sa.Column('sku', sa.String(length=30), nullable=False, unique=True),
-        sa.Column('name', sa.String(length=255), nullable=False),
-        sa.Column('price', sa.Numeric(precision=10, scale=2), nullable=False),
-        sa.Column('category_id', sa.Integer, sa.ForeignKey('catalog.product_categories.id'), nullable=False),
-        schema='catalog'
+    op.execute(
+        "CREATE TABLE catalog.products ("
+        "id SERIAL PRIMARY KEY, "
+        "sku VARCHAR(30) NOT NULL UNIQUE, "
+        "name VARCHAR(255) NOT NULL, "
+        "price NUMERIC(10, 2) NOT NULL, "
+        "category_id INTEGER NOT NULL,"
+        "FOREIGN KEY (category_id) REFERENCES catalog.product_categories(id)"
+        ")"
     )
 
     # Создание таблицы stock
-    op.create_table(
-        'stock',
-        sa.Column('id', sa.Integer, primary_key=True, autoincrement=True),
-        sa.Column('products_id', sa.Integer, sa.ForeignKey('catalog.products.id'), nullable=False),
-        sa.Column('warehouses_id', sa.Integer, sa.ForeignKey('catalog.warehouses.id'), nullable=False),
+    op.execute(
+        "CREATE TABLE catalog.stock ("
+        "id SERIAL PRIMARY KEY, "
+        "products_id INTEGER NOT NULL,"
+        "warehouses_id INTEGER NOT NULL,"
+        "FOREIGN KEY (products_id) REFERENCES catalog.products(id),"
+        "FOREIGN KEY (warehouses_id) REFERENCES catalog.warehouses(id)"
+        ")"
     )
 
-    statuses_enum = sa.Enum(
-        'unpublished',
-        'new',
-        'processing',
-        'pending',
-        'packing',
-        'shipped',
+    op.execute(
+        "CREATE TYPE sales.order_status AS ENUM "
+        "("
+        "'unpublished', "
+        "'new', "
+        "'processing', "
+        "'pending', "
+        "'packing', "
+        "'shipped'"
+        ")"
     )
 
     # Создание таблицы orders
-    op.create_table(
-        'orders',
-        sa.Column('id', sa.Integer, primary_key=True, autoincrement=True),
-        sa.Column('status', statuses_enum, nullable=False, default='unpublished'),
-        sa.Column('total_amount', sa.Numeric(precision=12, scale=2), nullable=False),
-        sa.Column('created_at', sa.Time(timezone=True), nullable=False),
-        sa.Column('warehouses_id', sa.Integer, sa.ForeignKey('catalog.warehouses.id'), nullable=False),
-        schema='sales'
+    op.execute(
+        "CREATE TABLE sales.orders ("
+        "id SERIAL PRIMARY KEY, "
+        "status sales.order_status NOT NULL DEFAULT 'unpublished',"
+        "total_amount NUMERIC(12,2) NOT NULL,"
+        "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),"
+        "warehouses_id INTEGER NOT NULL,"
+        "FOREIGN KEY (warehouses_id) REFERENCES catalog.warehouses(id)"
+        ")"
+    )
+
+    # Создание таблицы order_items
+    op.execute(
+        "CREATE TABLE sales.order_items ("
+        "id SERIAL PRIMARY KEY, "
+        "product_id INTEGER NOT NULL, "
+        "price NUMERIC(10,2) NOT NULL, "
+        "quantity INTEGER NOT NULL, "
+        "orders_id INTEGER NOT NULL, "
+        "FOREIGN KEY (product_id) REFERENCES catalog.products(id), "
+        "FOREIGN KEY (orders_id) REFERENCES sales.orders(id)"
+        ")"
     )
     pass
 
 
 def downgrade() -> None:
     # Удаление таблиц
-    op.drop_table('products', schema='catalog')
-    op.drop_table('orders', schema='sales')
+    op.execute("DROP TABLE IF EXIST sales.orders_item")
+    op.execute("DROP TABLE IF EXIST sales.orders")
+    op.execute("DROP TABLE IF EXIST catalog.stock")
+    op.execute("DROP TABLE IF EXIST catalog.products")
+    op.execute("DROP TABLE IF EXIST catalog.warehouses")
+    op.execute("DROP TABLE IF EXIST catalog.product_categories")
 
-    # Удаление таблиц
-    op.drop_table('stock', schema='sales')
-    op.drop_table('warehouses', schema='catalog')
-    op.drop_table('product_categories', schema='catalog')
-    op.drop_table('order_item', schema='sales')
+    op.execute("DROP TYPE IF EXIST sales.order_status")
 
     # Удаление схем
-    op.execute(sa.text("DROP SCHEMA IF EXISTS catalog CASCADE;"))
-    op.execute(sa.text("DROP SCHEMA IF EXISTS sales CASCADE;"))
+    op.execute("DROP SCHEMA IF EXISTS catalog CASCADE;")
+    op.execute("DROP SCHEMA IF EXISTS sales CASCADE;")
     pass
