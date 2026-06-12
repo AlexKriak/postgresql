@@ -11,7 +11,7 @@ from console import console, render_error
 from db import get_conn
 from validators import NonEmptyValidator, PriceValidator
 from commands import command, CATEGORY_PRODUCTS
-
+from src.auth import ROLE_CATALOG_MANAGER, ROLE_SALES_MANAGER
 
 @dataclass
 class Product:
@@ -24,7 +24,7 @@ class Product:
 
 
 def _render_product(product: Product) -> None:
-    """Отображает информацию о продукте в виде таблицы внутри панели."""
+    """Отображает информацию о продукте в виде таблицы внутри панели"""
     table = Table(show_header=False, box=None, padding=(0, 2))
     table.add_column("Поле", style="bold cyan", width=15)
     table.add_column("Значение", style="white")
@@ -43,7 +43,7 @@ def _render_product(product: Product) -> None:
 
 
 def _get_category_choices() -> list[str]:
-    """Получает список названий категорий из БД."""
+    """Получает список названий категорий из БД"""
     conn = get_conn()
     with conn.cursor() as cur:
         cur.execute("SELECT name FROM catalog.product_categories ORDER BY name")
@@ -51,9 +51,9 @@ def _get_category_choices() -> list[str]:
     return [row[0] for row in rows]
 
 
-@command("list products", "список всех товаров", CATEGORY_PRODUCTS)
+@command("list products", "список всех товаров", CATEGORY_PRODUCTS, [ROLE_CATALOG_MANAGER, ROLE_SALES_MANAGER])
 def list_products() -> None:
-    """Выводит список всех продуктов из таблицы catalog.products."""
+    """Выводит список всех продуктов из таблицы catalog.products"""
     conn = get_conn()
     table = Table(title="Товары", show_header=True, header_style="bold cyan")
     table.add_column("ID", style="dim", width=6, justify="right")
@@ -83,9 +83,9 @@ def list_products() -> None:
     console.print(table)
 
 
-@command("show product", "информация о товаре", CATEGORY_PRODUCTS)
+@command("show product", "информация о товаре", CATEGORY_PRODUCTS, [ROLE_CATALOG_MANAGER, ROLE_SALES_MANAGER])
 def show_product(_id: str) -> None:
-    """Показывает детальную информацию о продукте по его ID."""
+    """Показывает детальную информацию о продукте по его ID"""
     conn = get_conn()
     with conn.cursor(row_factory=class_row(Product)) as cur:
         cur.execute("""
@@ -103,9 +103,9 @@ def show_product(_id: str) -> None:
     _render_product(product)
 
 
-@command("add product", "добавить товар (интерактивно)", CATEGORY_PRODUCTS)
+@command("add product", "добавить товар (интерактивно)", CATEGORY_PRODUCTS, [ROLE_CATALOG_MANAGER])
 def add_product() -> None:
-    """Добавляет новый продукт в базу данных."""
+    """Добавляет новый продукт в базу данных"""
     sku = prompt("SKU (до 30 символов): ", validator=NonEmptyValidator()).strip()[:30]
     name = prompt("Название: ", validator=NonEmptyValidator()).strip()
     price_str = prompt("Цена: ", validator=PriceValidator()).strip()
@@ -140,9 +140,9 @@ def add_product() -> None:
     console.print(f"[green]Товар '{name}' (SKU: {sku}) добавлен[/green]")
 
 
-@command("edit product", "редактировать товар", CATEGORY_PRODUCTS)
+@command("edit product", "редактировать товар", CATEGORY_PRODUCTS, [ROLE_CATALOG_MANAGER])
 def edit_product(_id: str) -> None:
-    """Редактирует существующий продукт."""
+    """Редактирует существующий продукт"""
     conn = get_conn()
     with conn.cursor(row_factory=class_row(Product)) as cur:
         cur.execute("""
@@ -192,9 +192,9 @@ def edit_product(_id: str) -> None:
     console.print(f"[green]Товар '{name}' (ID: {_id}) обновлен[/green]")
 
 
-@command("delete product", "удалить товар", CATEGORY_PRODUCTS)
+@command("delete product", "удалить товар", CATEGORY_PRODUCTS, [ROLE_CATALOG_MANAGER])
 def delete_product(_id: str) -> None:
-    """Удаляет продукт из базы данных."""
+    """Удаляет продукт из базы данных"""
     conn = get_conn()
     with conn.cursor(row_factory=class_row(Product)) as cur:
         cur.execute("""

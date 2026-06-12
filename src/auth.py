@@ -1,4 +1,7 @@
-from typing import Final, Sequence
+# src/auth.py
+import os
+import argparse
+from typing import Final, Sequence, Optional
 
 from prompt_toolkit import prompt
 

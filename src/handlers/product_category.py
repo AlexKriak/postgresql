@@ -9,7 +9,7 @@ from console import console, render_error
 from db import get_conn
 from validators import NonEmptyValidator
 from commands import command, CATEGORY_PRODUCT_CATEGORY
-
+from src.auth import ROLE_CATALOG_MANAGER
 
 @dataclass
 class ProductCategory:
@@ -32,7 +32,7 @@ def _render_category(category: ProductCategory) -> None:
     console.print(panel)
 
 
-@command("list product_categories", "список всех категорий", CATEGORY_PRODUCT_CATEGORY)
+@command("list product_categories", "список всех категорий", CATEGORY_PRODUCT_CATEGORY, [ROLE_CATALOG_MANAGER])
 def list_categories() -> None:
     conn = get_conn()
     table = Table(title="Категории", show_header=True, header_style="bold cyan")
@@ -48,7 +48,7 @@ def list_categories() -> None:
     console.print(table)
 
 
-@command("show product_category", "информация о категории", CATEGORY_PRODUCT_CATEGORY)
+@command("show product_category", "информация о категории", CATEGORY_PRODUCT_CATEGORY, [ROLE_CATALOG_MANAGER])
 def show_category(_id: str) -> None:
     conn = get_conn()
     with conn.cursor(row_factory=class_row(ProductCategory)) as cur:
@@ -62,7 +62,7 @@ def show_category(_id: str) -> None:
     _render_category(category)
 
 
-@command("add product_category", "добавить категорию", CATEGORY_PRODUCT_CATEGORY)
+@command("add product_category", "добавить категорию", CATEGORY_PRODUCT_CATEGORY, [ROLE_CATALOG_MANAGER])
 def add_category() -> None:
     name = prompt("Название категории: ", validator=NonEmptyValidator()).strip()
     conn = get_conn()
@@ -77,7 +77,7 @@ def add_category() -> None:
         render_error(f"Ошибка добавления категории: {e}")
 
 
-@command("edit product_category", "редактировать категорию", CATEGORY_PRODUCT_CATEGORY)
+@command("edit product_category", "редактировать категорию", CATEGORY_PRODUCT_CATEGORY, [ROLE_CATALOG_MANAGER])
 def edit_category(_id: str) -> None:
     conn = get_conn()
     with conn.cursor(row_factory=class_row(ProductCategory)) as cur:
@@ -100,7 +100,7 @@ def edit_category(_id: str) -> None:
         render_error(f"Ошибка редактирования категории: {e}")
 
 
-@command("delete product_category", "удалить категорию", CATEGORY_PRODUCT_CATEGORY)
+@command("delete product_category", "удалить категорию", CATEGORY_PRODUCT_CATEGORY, [ROLE_CATALOG_MANAGER])
 def delete_category(_id: str) -> None:
     conn = get_conn()
     with conn.cursor(row_factory=class_row(ProductCategory)) as cur:

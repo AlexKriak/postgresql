@@ -1,0 +1,38 @@
+Под суперпользователем:
+
+-- 1. Создание ролей catalog_manager, sales_manager, supervisor
+CREATE ROLE catalog_manager LOGIN PASSWORD 'secure_password_catalog';
+
+CREATE ROLE sales_manager LOGIN PASSWORD 'secure_password_sales';
+
+CREATE ROLE supervisor;
+GRANT catalog_manager TO supervisor;
+GRANT sales_manager TO supervisor;
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- 2. Создание схемы auth и таблицы users
+CREATE SCHEMA IF NOT EXISTS auth;
+
+CREATE TABLE auth.users (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(255) NOT NULL UNIQUE,
+    password TEXT NOT NULL, -- Хранится как хеш
+    role VARCHAR(50) NOT NULL CHECK (role IN ('catalog_manager', 'sales_manager'))
+);
+
+-- 3. Добавление пользователей и выдача им прав
+INSERT INTO auth.users (username, password, role) VALUES ('cat_man', crypt('pass', gen_salt('bf')), 'catalog_manager');
+INSERT INTO auth.users (username, password, role) VALUES ('sal_man', crypt('pass', gen_salt('bf')), 'sales_manager');
+
+GRANT USAGE ON SCHEMA auth TO catalog_manager, sales_manager;
+GRANT SELECT ON auth.users TO catalog_manager, sales_manager;
+
+
+*Настройка конфигураций запуска в IDE
+1. Открыть Run/Debug Configurations
+2. Найти конфигурацию запуска main
+3. Клонировать её, чтобы получить три конфигурации: app_user, catalog_manager, sales_manager
+3.1. Для каждой конфигурации своё имя)
+3.2. В разделе Environment variables, изменить DB_USER и DB_PASSWORD на соответствующие учетные данные для catalog_manager и sales_manager
+4. Теперь можно запускать приложение под разными ролями PostgreSQ
