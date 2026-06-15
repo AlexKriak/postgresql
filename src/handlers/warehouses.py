@@ -1,7 +1,7 @@
 # src/handlers/warehouses.py
 from dataclasses import dataclass
 from prompt_toolkit import prompt
-from prompt_toolkit.shortcuts import PromptSession
+from prompt_toolkit.shortcuts import choice
 from psycopg.rows import class_row
 from rich.panel import Panel
 from rich.table import Table
@@ -43,20 +43,12 @@ def _render_warehouse(warehouse: Warehouse) -> None:
     console.print(panel)
 
 
-def _ensure_one_central_exists(conn, new_is_central: bool, new_id: Optional[int] = None) -> None:
-    """Гарантирует, что существует ровно один центральный склад."""
+def _get_warehouse_count() -> int:
+    """Возвращает количество складов"""
+    conn = get_conn()
     with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM catalog.warehouses WHERE is_central = true")
-        central_count = cur.fetchone()[0]
-
-        if new_is_central:
-            # Если делаем новый склад центральным — сбрасываем флаг у всех остальных
-            if central_count > 0:
-                cur.execute("UPDATE catalog.warehouses SET is_central = false WHERE is_central = true AND id != %s", (new_id,))
-        else:
-            # Если не делаем центральным — должен существовать хотя бы один
-            if central_count == 0:
-                raise ValueError("Должен существовать хотя бы один центральный склад.")
+        cur.execute("SELECT COUNT(*) FROM catalog.warehouses")
+        return cur.fetchone()[0]
 
 
 @command("list warehouses", "список всех складов", CATEGORY_WAREHOUSES, [ROLE_CATALOG_MANAGER])
@@ -106,35 +98,27 @@ def show_warehouse(_id: str) -> None:
 
 @command("add warehouse", "добавить склад (интерактивно)", CATEGORY_WAREHOUSES, [ROLE_CATALOG_MANAGER])
 def add_warehouse() -> None:
+
     conn = get_conn()
 
-    # Выбор города через choices
-    city = prompt(
-        "Город: ",
-        choices=get_city_choices(),
+    # Выбор города через choice()
+    city = choice(
+        message="Город: ",
+        options=[(c, c) for c in get_city_choices()],
         default=get_city_choices()[0]
-    ).strip()
+    )
 
     address = prompt("Адрес: ", validator=NonEmptyValidator()).strip()
-    label = prompt("Метка (необязательно): ").strip() or None
+    label: str | None = prompt("Метка (необязательно): ").strip() or None
 
-    # Проверяем, есть ли уже центральный склад
-    with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM catalog.warehouses WHERE is_central = true")
-        central_count = cur.fetchone()[0]
-
-    is_central_default = "y" if central_count == 0 else "n"
-    is_central_answer: str = prompt(
-        f"Центральный склад? (y/n, д/н) [по умолчанию {'Да' if is_central_default == 'y' else 'Нет'}]: "
-    ).strip().lower()
-
-    is_central = is_central_default == "y" if not is_central_answer else YesNoValidator.is_yes(is_central_answer)
-
-    try:
-        _ensure_one_central_exists(conn, is_central)
-    except ValueError as e:
-        render_error(str(e))
-        return
+    # Логика центрального склада: если это первый склад — делаем центральным без вопроса
+    warehouse_count: int = _get_warehouse_count()
+    if warehouse_count == 0:
+        is_central = True
+        console.print("[i]Это первый склад, он автоматически сделан центральным.[/i]")
+    else:
+        # Спрашиваем только если не первый склад
+        is_central = yes_no_choice("Сделать центральным?")
 
     with conn.cursor() as cur:
         cur.execute(
@@ -163,28 +147,23 @@ def edit_warehouse(_id: str) -> None:
         render_error(f"Склад с ID {wid} не найден")
         return
 
-    city = prompt(
-        "Город: ",
-        choices=get_city_choices(),
+    city = choice(
+        message="Город: ",
+        options=[(c, c) for c in get_city_choices()],
         default=w.city
-    ).strip()
+    )
+
     address = prompt("Адрес: ", default=w.address, validator=NonEmptyValidator()).strip()
     label: str | None = (
         prompt("Метка (необязательно): ", default=w.label or "").strip() or None
     )
 
-    # Логика is_central
-    is_central_current_display = "Да" if w.is_central else "Нет"
-    is_central_answer = prompt(
-        f"Центральный склад? (y/n, д/н) [текущее: {is_central_current_display}]: "
-    ).strip().lower()
-    is_central = w.is_central if not is_central_answer else YesNoValidator.is_yes(is_central_answer)
-
-    try:
-        _ensure_one_central_exists(conn, is_central, wid)
-    except ValueError as e:
-        render_error(str(e))
-        return
+    # Логика: если текущий склад центральный — не спрашиваем; иначе — спрашиваем
+    if w.is_central:
+        is_central = True
+        console.print("[i]Текущий склад уже центральный, флаг сохранён.[/i]")
+    else:
+        is_central = yes_no_choice("Сделать центральным?")
 
     with conn.cursor() as cur:
         cur.execute(
@@ -223,8 +202,20 @@ def delete_warehouse(_id: str) -> None:
 
     _render_warehouse(w)
 
-    answer: str = prompt("Вы уверены? (y/n, д/н): ", validator=YesNoValidator())
-    if YesNoValidator.is_yes(answer):
+    answer = yes_no_choice("Удалить склад?")
+    if answer:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM catalog.warehouses WHERE id = %s", (wid,))
         console.print(f"[green]Склад #{wid} удалён[/green]")
+
+
+def yes_no_choice(message: str) -> bool:
+    result: str = choice(
+        message=message,
+        options=[
+            ("y", "Да"),
+            ("n", "Нет"),
+        ],
+        default="n"
+    )
+    return result == "y"

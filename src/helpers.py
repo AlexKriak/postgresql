@@ -15,17 +15,6 @@ def get_warehouse_choices() -> list[tuple[int, str]]:
         """)
         return cur.fetchall()
 
-#Возвращает список (id, display_name) для выбора товара
-def get_product_choices() -> list[tuple[int, str]]:
-    conn = get_conn()
-    with conn.cursor() as cur:
-        cur.execute("""
-            SELECT id, sku || ' - ' || name AS display
-            FROM catalog.products
-            ORDER BY name
-        """)
-        return cur.fetchall()
-
 #Возвращает список (id, name) для выбора категории
 def get_category_choices() -> list[tuple[int, str]]:
     conn = get_conn()

@@ -65,11 +65,11 @@ def upgrade() -> None:
     # Создание таблицы order_items
     op.execute(
         "CREATE TABLE sales.order_items ("
-        "id BIGSERIAL PRIMARY KEY, "
         "product_id INTEGER NOT NULL, "
         "price NUMERIC(10,2) NOT NULL, "
         "quantity INTEGER NOT NULL, "
         "orders_id INTEGER NOT NULL, "
+        "PRIMARY KEY (orders_id, product_id), "
         "FOREIGN KEY (product_id) REFERENCES catalog.products(id), "
         "FOREIGN KEY (orders_id) REFERENCES sales.orders(id)"
         ")"

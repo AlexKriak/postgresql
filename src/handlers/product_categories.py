@@ -1,6 +1,6 @@
 # src/handlers/product_categories.py
 from dataclasses import dataclass
-from prompt_toolkit import prompt
+from prompt_toolkit.shortcuts import choice
 from psycopg.rows import class_row
 from rich.table import Table
 from rich.panel import Panel
@@ -11,6 +11,7 @@ from validators import NonEmptyValidator
 from commands import command, CATEGORY_PRODUCT_CATEGORY
 from src.auth import ROLE_CATALOG_MANAGER
 from src.helpers import get_category_choices
+from typing import Optional
 
 
 @dataclass
@@ -142,8 +143,20 @@ def delete_category(_id: str) -> None:
         render_error(f"Невозможно удалить категорию '{c.name}', так как в ней находятся {count} товаров.")
         return
 
-    answer: str = prompt("Вы уверены? (y/n, д/н): ", validator=YesNoValidator())
-    if YesNoValidator.is_yes(answer):
+    answer = yes_no_choice("Удалить категорию?")
+    if answer:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM catalog.product_categories WHERE id = %s", (cid,))
         console.print(f"[green]Категория '{c.name}' удалена[/green]")
+
+
+def yes_no_choice(message: str) -> bool:
+    result: str = choice(
+        message=message,
+        options=[
+            ("y", "Да"),
+            ("n", "Нет"),
+        ],
+        default="n"
+    )
+    return result == "y"

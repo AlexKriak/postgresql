@@ -1,7 +1,7 @@
 # src/handlers/products.py
 from dataclasses import dataclass
 from decimal import Decimal
-from prompt_toolkit import prompt
+from prompt_toolkit.shortcuts import choice
 from psycopg.rows import class_row
 from rich.table import Table
 from rich.panel import Panel
@@ -11,10 +11,8 @@ from db import get_conn
 from validators import NonEmptyValidator, PriceValidator
 from commands import command, CATEGORY_PRODUCTS
 from src.auth import ROLE_CATALOG_MANAGER
-from src.helpers import get_category_choices, get_product_choices
+from src.helpers import get_category_choices
 from typing import Optional
-
-from src.validators import YesNoValidator
 
 
 @dataclass
@@ -102,7 +100,7 @@ def show_product(_id: str) -> None:
 
 @command("add product", "добавить товар (интерактивно)", CATEGORY_PRODUCTS, [ROLE_CATALOG_MANAGER])
 def add_product() -> None:
-    sku = prompt("SKU (до 30 символов): ", validator=NonEmptyValidator()).strip()[:30]
+    sku: str = prompt("SKU (до 30 символов): ", validator=NonEmptyValidator()).strip()[:30]
     name: str = prompt("Название: ", validator=NonEmptyValidator()).strip()
     price_str: str = prompt("Цена: ", validator=PriceValidator()).strip()
     price: Decimal = Decimal(price_str)
@@ -112,15 +110,14 @@ def add_product() -> None:
         render_error("Нет доступных категорий. Сначала создайте категорию.")
         return
 
-    # Выбор категории через choices
-    cat_choices = [f"{cid}: {cname}" for cid, cname in categories]
-    selected = prompt(
-        "Категория: ",
-        choices=cat_choices,
-        default=cat_choices[0]
-    ).strip()
+    cat_choices = [(str(cid), cname) for cid, cname in categories]
+    selected_cid_str: str = choice(
+        message="Категория: ",
+        options=cat_choices,
+        default=cat_choices[0][0]
+    )
     try:
-        cat_id = int(selected.split(':')[0])
+        cat_id: int = int(selected_cid_str)
     except ValueError:
         render_error("Неверный выбор категории.")
         return
@@ -160,20 +157,20 @@ def edit_product(_id: str) -> None:
         render_error(f"Товар с ID {pid} не найден")
         return
 
-    sku = prompt("SKU (до 30 символов): ", default=p.sku, validator=NonEmptyValidator()).strip()[:30]
+    sku: str = prompt("SKU (до 30 символов): ", default=p.sku, validator=NonEmptyValidator()).strip()[:30]
     name: str = prompt("Название: ", default=p.name, validator=NonEmptyValidator()).strip()
     price_str: str = prompt("Цена: ", default=str(p.price), validator=PriceValidator()).strip()
     price: Decimal = Decimal(price_str)
 
-    categories: list[tuple[int, str]] = get_category_choices()
-    cat_choices = [f"{cid}: {cname}" for cid, cname in categories]
-    selected = prompt(
-        "Категория: ",
-        choices=cat_choices,
-        default=f"{p.category_id}: {p.category_name}"
-    ).strip()
+    categories = get_category_choices()
+    cat_choices = [(str(cid), cname) for cid, cname in categories]
+    selected_cid_str: str = choice(
+        message="Категория: ",
+        options=cat_choices,
+        default=str(p.category_id)
+    )
     try:
-        cat_id = int(selected.split(':')[0])
+        cat_id: int = int(selected_cid_str)
     except ValueError:
         render_error("Неверный выбор категории.")
         return
@@ -215,8 +212,20 @@ def delete_product(_id: str) -> None:
 
     _render_product(p)
 
-    answer: str = prompt("Вы уверены? (y/n, д/н): ", validator=YesNoValidator())
-    if YesNoValidator.is_yes(answer):
+    answer: bool = yes_no_choice("Удалить товар?")
+    if answer:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM catalog.products WHERE id = %s", (pid,))
         console.print(f"[green]Товар '{p.name}' (ID: {pid}) удалён[/green]")
+
+
+def yes_no_choice(message: str) -> bool:
+    result: str = choice(
+        message=message,
+        options=[
+            ("y", "Да"),
+            ("n", "Нет"),
+        ],
+        default="n"
+    )
+    return result == "y"
