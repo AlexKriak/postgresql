@@ -10,6 +10,8 @@ from db import get_conn
 from validators import NonEmptyValidator
 from commands import command, CATEGORY_PRODUCT_CATEGORY
 from src.auth import ROLE_CATALOG_MANAGER
+from src.helpers import get_category_choices
+
 
 @dataclass
 class ProductCategory:
@@ -43,88 +45,105 @@ def list_categories() -> None:
         cur.execute("SELECT * FROM catalog.product_categories ORDER BY name")
         categories: list[ProductCategory] = cur.fetchall()
 
-    for category in categories:
-        table.add_row(str(category.id), category.name)
+    for c in categories:
+        table.add_row(str(c.id), c.name)
     console.print(table)
 
 
 @command("show product_category", "информация о категории", CATEGORY_PRODUCT_CATEGORY, [ROLE_CATALOG_MANAGER])
 def show_category(_id: str) -> None:
-    conn = get_conn()
-    with conn.cursor(row_factory=class_row(ProductCategory)) as cur:
-        cur.execute("SELECT * FROM catalog.product_categories WHERE id = %s", (_id,))
-        category: ProductCategory | None = cur.fetchone()
-
-    if category is None:
-        render_error(f"Категория с ID {_id} не найдена")
+    try:
+        cid = int(_id)
+    except ValueError:
+        render_error("ID должен быть числом.")
         return
 
-    _render_category(category)
+    conn = get_conn()
+    with conn.cursor(row_factory=class_row(ProductCategory)) as cur:
+        cur.execute("SELECT * FROM catalog.product_categories WHERE id = %s", (cid,))
+        c: ProductCategory | None = cur.fetchone()
+
+    if not c:
+        render_error(f"Категория с ID {cid} не найдена")
+        return
+
+    _render_category(c)
 
 
 @command("add product_category", "добавить категорию", CATEGORY_PRODUCT_CATEGORY, [ROLE_CATALOG_MANAGER])
 def add_category() -> None:
-    name = prompt("Название категории: ", validator=NonEmptyValidator()).strip()
+    name: str = prompt("Название категории: ", validator=NonEmptyValidator()).strip()
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO catalog.product_categories (name) VALUES (%s)",
+                "INSERT INTO catalog.product_categories (name) VALUES (%s) RETURNING id",
                 (name,),
             )
-        console.print(f"[green]Категория '{name}' добавлена[/green]")
-    except Exception as e: # Обработка дубликата или других ошибок
+            new_id = cur.fetchone()[0]
+        console.print(f"[green]Категория '{name}' добавлена (ID: {new_id})[/green]")
+    except Exception as e:
         render_error(f"Ошибка добавления категории: {e}")
 
 
 @command("edit product_category", "редактировать категорию", CATEGORY_PRODUCT_CATEGORY, [ROLE_CATALOG_MANAGER])
 def edit_category(_id: str) -> None:
-    conn = get_conn()
-    with conn.cursor(row_factory=class_row(ProductCategory)) as cur:
-        cur.execute("SELECT * FROM catalog.product_categories WHERE id = %s", (_id,))
-        category: ProductCategory | None = cur.fetchone()
-
-    if category is None:
-        render_error(f"Категория с ID {_id} не найдена")
+    try:
+        cid = int(_id)
+    except ValueError:
+        render_error("ID должен быть числом.")
         return
 
-    new_name = prompt("Новое название: ", default=category.name, validator=NonEmptyValidator()).strip()
+    conn = get_conn()
+    with conn.cursor(row_factory=class_row(ProductCategory)) as cur:
+        cur.execute("SELECT * FROM catalog.product_categories WHERE id = %s", (cid,))
+        c: ProductCategory | None = cur.fetchone()
+
+    if not c:
+        render_error(f"Категория с ID {cid} не найдена")
+        return
+
+    new_name: str = prompt("Новое название: ", default=c.name, validator=NonEmptyValidator()).strip()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE catalog.product_categories SET name = %s WHERE id = %s",
-                (new_name, _id),
+                (new_name, cid),
             )
-        console.print(f"[green]Категория '#{_id}' обновлена[/green]")
-    except Exception as e: # Обработка дубликата или других ошибок
+        console.print(f"[green]Категория '#{cid}' обновлена[/green]")
+    except Exception as e:
         render_error(f"Ошибка редактирования категории: {e}")
 
 
 @command("delete product_category", "удалить категорию", CATEGORY_PRODUCT_CATEGORY, [ROLE_CATALOG_MANAGER])
 def delete_category(_id: str) -> None:
-    conn = get_conn()
-    with conn.cursor(row_factory=class_row(ProductCategory)) as cur:
-        cur.execute("SELECT * FROM catalog.product_categories WHERE id = %s", (_id,))
-        category: ProductCategory | None = cur.fetchone()
-
-    if category is None:
-        render_error(f"Категория с ID {_id} не найдена")
+    try:
+        cid = int(_id)
+    except ValueError:
+        render_error("ID должен быть числом.")
         return
 
-    _render_category(category)
+    conn = get_conn()
+    with conn.cursor(row_factory=class_row(ProductCategory)) as cur:
+        cur.execute("SELECT * FROM catalog.product_categories WHERE id = %s", (cid,))
+        c: ProductCategory | None = cur.fetchone()
 
-    # Проверить, используются ли товары из этой категории
+    if not c:
+        render_error(f"Категория с ID {cid} не найдена")
+        return
+
+    _render_category(c)
+
     with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM catalog.products WHERE category_id = %s", (_id,))
+        cur.execute("SELECT COUNT(*) FROM catalog.products WHERE category_id = %s", (cid,))
         count = cur.fetchone()[0]
 
     if count > 0:
-        render_error(f"Невозможно удалить категорию '{category.name}', так как в ней находятся {count} товаров.")
+        render_error(f"Невозможно удалить категорию '{c.name}', так как в ней находятся {count} товаров.")
         return
 
-    answer = prompt("Вы уверены? (y/n, д/н): ", validator=YesNoValidator())
-
+    answer: str = prompt("Вы уверены? (y/n, д/н): ", validator=YesNoValidator())
     if YesNoValidator.is_yes(answer):
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM catalog.product_categories WHERE id = %s", (_id,))
-        console.print(f"[green]Категория '{category.name}' удалена[/green]")
+            cur.execute("DELETE FROM catalog.product_categories WHERE id = %s", (cid,))
+        console.print(f"[green]Категория '{c.name}' удалена[/green]")

@@ -21,10 +21,10 @@ def main():
 
     login(username=cli_args.username, password=cli_args.password)
 
-    session = PromptSession(history=FileHistory(".warehouse_cli_history"))
+    session: PromptSession[str] = PromptSession(history=FileHistory(".warehouse_cli_history"))
 
     user = auth_user()
-    prompt_style = Style.from_dict({
+    prompt_style: Style = Style.from_dict({
         'username': '#ansigreen bold',
         'role': '#ansimagenta',
         'at': '#ansiblue',
@@ -32,11 +32,10 @@ def main():
         'pound': '#ansicyan',
     })
 
-    # Вывод заголовка через rich
     console.print("\n[bold cyan]═══════════════════════════════════════[/bold cyan]")
     console.print("[bold cyan]   Inventory Management System[/bold cyan]")
     console.print("[bold cyan]═══════════════════════════════════════[/bold cyan]")
-    console.print(f"[dim]Подключено к БД: warehouse_db (user: {user.username}, role: {user.role})[/dim]\n")
+    console.print(f"[dim]Подключено к БД: warehouse_db (пользователь: {user.username}, роль: {user.role})[/dim]\n")
 
     while True:
         try:
@@ -54,7 +53,6 @@ def main():
             if cmd:
                 try:
                     args = get_args(text, cmd)
-                    # Вызов обработчика с аргументами
                     cmd.handler(**args)
                 except Exception as e:
                     render_error(f"Ошибка выполнения команды: {e}")
