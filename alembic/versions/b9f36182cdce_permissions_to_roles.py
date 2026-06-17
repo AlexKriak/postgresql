@@ -18,7 +18,6 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # Выдача прав catalog_manager на схему catalog и на будущие таблицы
-    op.execute("GRANT USAGE ON SCHEMA catalog TO catalog_manager;")
     op.execute("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA catalog TO catalog_manager;")
     op.execute("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA catalog TO catalog_manager;")
     op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog GRANT ALL ON TABLES TO catalog_manager;")
@@ -41,6 +40,10 @@ def upgrade() -> None:
     op.execute("GRANT SELECT ON ALL TABLES IN SCHEMA auth TO catalog_manager, sales_manager;")
     op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT SELECT ON TABLES TO catalog_manager, sales_manager;")
 
+    #Доступ для всех ролей, включая будущие
+    op.execute("GRANT USAGE ON SCHEMA catalog TO PUBLIC;")
+    op.execute("GRANT SELECT ON ALL TABLE IN SCHEMA catalog TO PUBLIC")
+    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog SELECT ON TABLES TO PUBLIC")
 
 def downgrade() -> None:
     # Отзыв прав
@@ -64,3 +67,7 @@ def downgrade() -> None:
 
     op.execute("REVOKE SELECT ON ALL TABLES IN SCHEMA auth FROM catalog_manager, sales_manager;")
     op.execute("REVOKE USAGE ON SCHEMA auth FROM catalog_manager, sales_manager;")
+
+    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog REVOKE SELECT ON TABLES FROM PUBLIC;")
+    op.execute("REVOKE SELECT ON ALL TABLES IN SCHEMA catalog FROM PUBLIC;")
+    op.execute("REVOKE USAGE ON SCHEMA catalog FROM PUBLIC;")
