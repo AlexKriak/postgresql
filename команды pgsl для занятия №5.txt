@@ -1,0 +1,6 @@
+Под суперпользователем:
+
+-- 1. Создание ролей inventory_manager, worker
+CREATE ROLE inventory_manager LOGIN PASSWORD 'secure_password_inventory';
+CREATE ROLE worker LOGIN PASSWORD 'secure_password_worker';
+
