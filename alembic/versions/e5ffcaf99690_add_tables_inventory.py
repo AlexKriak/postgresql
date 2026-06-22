@@ -20,6 +20,17 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.execute(sa.text("CREATE SCHEMA IF NOT EXISTS inventory;"))
 
+    # Создание таблицы inventory.deliveries
+    op.execute(
+        "CREATE TABLE inventory.deliveries (
+        "order_id INTEGER PRIMARY KEY,"
+        "status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'shipping', 'shipped')),"
+        "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),"
+        "shipped_at TIMESTAMPTZ,"
+        "FOREIGN KEY (order_id) REFERENCES sales.orders(id)"
+        ");"
+    )
+
     # Создание таблицы inventory.routes
     op.execute(
         "CREATE TABLE inventory.routes ("
@@ -36,13 +47,12 @@ def upgrade() -> None:
     # Создание таблицы stock
     op.execute(
         "CREATE TABLE inventory.stock ("
-        "id SERIAL PRIMARY KEY,"
         "warehouse_id INTEGER NOT NULL,"
         "product_id INTEGER NOT NULL,"
         "quantity INTEGER NOT NULL DEFAULT 0 CHECK (quantity >= 0),"
         "FOREIGN KEY (warehouse_id) REFERENCES catalog.warehouses(id),"
         "FOREIGN KEY (product_id) REFERENCES catalog.products(id),"
-        "UNIQUE(warehouse_id, product_id)"
+        "PRIMARY KEY(warehouse_id, product_id)"
         ");"
     )
 
@@ -53,11 +63,9 @@ def upgrade() -> None:
         "order_id INTEGER,"
         "product_id INTEGER NOT NULL,"
         "quantity INTEGER NOT NULL CHECK (quantity > 0),"
-        "warehouse_id INTEGER NOT NULL,"
         "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),"
         "FOREIGN KEY (order_id) REFERENCES sales.orders(id),"
         "FOREIGN KEY (product_id) REFERENCES catalog.products(id),"
-        "FOREIGN KEY (warehouse_id) REFERENCES catalog.warehouses(id)"
         ");"
     )
 
@@ -84,8 +92,6 @@ def upgrade() -> None:
         "to_warehouse_id INTEGER NOT NULL,"
         "status TEXT NOT NULL DEFAULT 'planned' "
         "CHECK (status IN ('planned', 'shipping', 'in_transit', 'arrived', 'received')),"
-        "total_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,"
-        "min_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,"
         "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),"
         "started_at TIMESTAMPTZ,"
         "arriving_at TIMESTAMPTZ,"
@@ -135,6 +141,7 @@ def downgrade() -> None:
     op.execute("DROP TABLE IF EXISTS inventory.transfer_items CASCADE;")
     op.execute("DROP TABLE IF EXISTS inventory.transfers CASCADE;")
     op.execute("DROP TABLE IF EXISTS inventory.delivery_items CASCADE;")
+    op.execute("DROP TABLE IF EXISTS inventory.deliveries CASCADE;")
     op.execute("DROP TABLE IF EXISTS inventory.reserves CASCADE;")
     op.execute("DROP TABLE IF EXISTS inventory.stock CASCADE;")
     op.execute("DROP TABLE IF EXISTS inventory.routes CASCADE;")
