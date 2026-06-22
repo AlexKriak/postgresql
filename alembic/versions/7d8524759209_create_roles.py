@@ -20,7 +20,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # Создание ролей inventory_manager и worker отдельными запросам из txt файла
-    op.execute("ALTER TABLE auth.users DROP CONSTRAINT IF EXIST auth_users_role_check;")
+    op.execute("ALTER TABLE auth.users DROP CONSTRAINT IF EXISTS auth_users_role_check;")
     op.execute(
         "ALTER TABLE auth.users"
         "ADD CONSTRAINT auth_users_role_check"
@@ -35,7 +35,7 @@ def upgrade() -> None:
     op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA inventory GRANT ALL ON SEQUENCES TO inventory_manager;")
 
     op.execute("GRANT USAGE ON SCHEMA sales TO inventory_manager;")
-    op.execute("GRANT SELECT ON SCHEMA sales TO inventory_manager;")
+    op.execute("GRANT SELECT ON ALL TABLES IN SCHEMA sales TO inventory_manager;")
     op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA sales GRANT SELECT ON TABLES TO inventory_manager;")
     op.execute("GRANT UPDATE (status) ON sales.orders TO inventory_manager;")
 
@@ -44,36 +44,39 @@ def upgrade() -> None:
 
     # Обновление статусов
     op.execute("GRANT UPDATE (status, shipped_at) ON inventory.delivery_items TO worker;")
-    op.execute("GRANT UPDATE (status, started_at, arriving_at) ON inventory.transfer TO worker;")
+    op.execute("GRANT UPDATE (status, started_at, arriving_at) ON inventory.transfers TO worker;")
     op.execute("GRANT UPDATE (status, shipped_at) ON inventory.transfer_items TO worker;")
-    op.execute("GRANT UPDATE (received_at) ON inventory.transfer TO worker;")
+    op.execute("GRANT UPDATE (received_at) ON inventory.transfers TO worker;")
     op.execute("GRANT UPDATE (received_at) ON inventory.transfer_items TO worker;")
 
     op.execute("GRANT USAGE ON SCHEMA inventory TO worker;")
     op.execute("GRANT SELECT ON ALL TABLES IN SCHEMA inventory TO worker;")
 
+    op.execute("ALTER TABLE sales.orders ADD COLUMN processing_by INTEGER;")
+    op.execute(
+        "ALTER TABLE sales.orders"
+        "ADD CONSTRAINT fk_orders_users_processing_by"
+        "FOREIGN KEY (processing_by) REFERENCES auth.users(id);"
+    )
+
 
 def downgrade() -> None:
-    op.execute("ALTER TABLE auth.users DROP CONSTRAINT IF EXIST auth_users_role_check;")
-    op.execute(
-        "ALTER TABLE auth.users"
-        "ADD CONSTRAINT auth_users_role_check"
-        "CHECK (role IN ('catalog_manager', 'sales_manager'));"
-    )
+    op.execute("ALTER TABLE sales.orders DROP CONSTRAINT IF EXISTS fk_orders_users_processing_by;")
+    op.execute("ALTER TABLE sales.orders DROP COLUMN IF EXISTS processing_by;")
 
     op.execute("REVOKE UPDATE (status) ON sales.orders FROM inventory_manager;")
     op.execute("ALTER TABLE DEFAULT PRIVILEGES ON SCHEMA sales REVOKE SELECT ON TABLE FROM inventory_manager;")
     op.execute("REVOKE SELECT ON ALL TABLES IN SCHEMA sales FROM inventory_manager")
-    op.execute("REVOKE USAGES ON SCHEMA sales FROM inventory_manager FROM inventory_manager;")
+    op.execute("REVOKE USAGES ON SCHEMA sales FROM inventory_manager;")
     op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA inventory REVOKE ALL ON SEQUENCES FROM inventory_manager;")
     op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA inventory REVOKE ALL ON TABLES FROM inventory_manager;")
     op.execute("REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA inventory FROM inventory_manager;")
     op.execute("REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA inventory FROM inventory_manager;")
     op.execute("REVOKE USAGES ON SCHEMA FROM inventory_manager;")
 
-    op.execute("REVOKE UPDATE (received_at) ON inventory.transfer FROM worker;")
+    op.execute("REVOKE UPDATE (received_at) ON inventory.transfers FROM worker;")
     op.execute("REVOKE UPDATE (received_at) ON inventory.transfer_item FROM worker;")
-    op.execute("REVOKE UPDATE (status, started_at, arriving_at) ON inventory.transfer FROM worker;")
+    op.execute("REVOKE UPDATE (status, started_at, arriving_at) ON inventory.transfers FROM worker;")
     op.execute("REVOKE UPDATE (status, shipped_at) ON inventory.delivery_items FROM worker;")
     op.execute("REVOKE UPDATE (status, shipped_at) ON inventory.transfer_items FROM worker;")
     op.execute("REVOKE UPDATE ON inventory.reserves FROM worker;")
@@ -81,3 +84,9 @@ def downgrade() -> None:
     op.execute("REVOKE SELECT ON ALL TABLES IN SCHEMA inventory FROM worker;")
     op.execute("REVOKE USAGES ON SCHEMA inventory FROM worker;")
 
+    op.execute("ALTER TABLE auth.users DROP CONSTRAINT IF EXISTS auth_users_role_check;")
+    op.execute(
+        "ALTER TABLE auth.users"
+        "ADD CONSTRAINT auth_users_role_check"
+        "CHECK (role IN ('catalog_manager', 'sales_manager'));"
+    )
