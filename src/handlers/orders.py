@@ -6,6 +6,7 @@ from prompt_toolkit.shortcuts import choice
 from psycopg.rows import class_row
 from rich.panel import Panel
 from rich.table import Table
+import psycopg.errors as pg_errors
 
 from console import console, render_error
 from db import get_conn
@@ -19,6 +20,7 @@ from typing import Optional
 
 from src.handlers.warehouses import Warehouse
 from src.handlers.order_items import _render_order_item_list, _get_order_items_by_order_id, add_order_item_interactive, _update_order_total, _get_order_items_by_order_id
+from src.helpers import yes_no_choice
 
 
 @dataclass
@@ -29,28 +31,21 @@ class Order:
     created_at: datetime.datetime
     warehouses_id: int
     created_by: int
+    processed_by: Optional[int] = None
 
 
 def _get_warehouse_by_id(wid: int) -> Optional['Warehouse']:
-
     conn = get_conn()
     with conn.cursor(row_factory=class_row(Warehouse)) as cur:
         cur.execute("SELECT * FROM catalog.warehouses WHERE id = %s", (wid,))
         return cur.fetchone()
 
 
-def _get_username_by_id(uid: int) -> str:
-    try:
-        u = get_user(uid)
-        return u.username
-    except Exception:
-        return f"UID:{uid}"
-
-
 def _render_order(order: Order) -> None:
     warehouse = _get_warehouse_by_id(order.warehouses_id)
     wh_display: str = f"{warehouse.city} ({warehouse.label or 'без метки'})" if warehouse else f"Склад ID {order.warehouses_id}"
-    creator: str = _get_username_by_id(order.created_by)
+    creator: str = get_username_by_id(order.created_by)
+    processor: str = get_username_by_id(order.processed_by) if order.processed_by else "Не назначен"
 
     table: Table = Table(show_header=False, box=None, padding=(0, 2))
     table.add_column("Поле", style="bold cyan", width=15)
@@ -61,6 +56,7 @@ def _render_order(order: Order) -> None:
     table.add_row("Дата создания", order.created_at.strftime("%Y-%m-%d %H:%M"))
     table.add_row("Склад", wh_display)
     table.add_row("Создано", creator)
+    table.add_row("Обрабатывает", processor)
 
     panel: Panel = Panel(
         table,
@@ -79,11 +75,13 @@ def _render_order_list(orders: list[Order]) -> None:
     table.add_column("Дата", style="magenta", min_width=20)
     table.add_column("Склад", style="green", min_width=20)
     table.add_column("Создано", style="cyan", min_width=15)
+    table.add_column("Обрабатывает", style="magenta", min_width=15)
 
     for o in orders:
         wh = _get_warehouse_by_id(o.warehouses_id)
         wh_disp: str = f"{wh.city} ({wh.label or 'без метки'})" if wh else str(o.warehouses_id)
-        creator: str = _get_username_by_id(o.created_by)
+        creator: str = get_username_by_id(o.created_by)
+        processor: str = get_username_by_id(o.processed_by) if o.processed_by else "Не назначен"
         table.add_row(
             str(o.id),
             o.status,
@@ -91,6 +89,7 @@ def _render_order_list(orders: list[Order]) -> None:
             o.created_at.strftime("%Y-%m-%d %H:%M"),
             wh_disp,
             creator,
+            processor
         )
     console.print(table)
 
@@ -98,10 +97,9 @@ def _render_order_list(orders: list[Order]) -> None:
 def _get_order_by_id(oid: int) -> Optional[Order]:
     conn = get_conn()
     with conn.cursor(row_factory=class_row(Order)) as cur:
-        cur.execute("""
-            SELECT o.id, o.status, o.total_amount, o.created_at, o.warehouses_id, o.created_by
-            FROM sales.orders o WHERE o.id = %s
-        """, (oid,))
+        cur.execute(
+            "SELECT o.id, o.status, o.total_amount, o.created_at, o.warehouses_id, o.created_by, o.processed_by"
+            "FROM sales.orders o WHERE o.id = %s", (oid,))
         return cur.fetchone()
 
 
@@ -113,10 +111,10 @@ def _can_modify_order(status: str) -> bool:
 def list_orders() -> None:
     conn = get_conn()
     with conn.cursor(row_factory=class_row(Order)) as cur:
-        cur.execute("""
-            SELECT o.id, o.status, o.total_amount, o.created_at, o.warehouses_id, o.created_by
-            FROM sales.orders o ORDER BY o.created_at DESC
-        """)
+        cur.execute(
+            "SELECT o.id, o.status, o.total_amount, o.created_at, o.warehouses_id, o.created_by, o.processed_by"
+            "FROM sales.orders o ORDER BY o.created_at DESC"
+        )
         orders: list[Order] = cur.fetchall()
 
     if not orders:
@@ -125,7 +123,106 @@ def list_orders() -> None:
     _render_order_list(orders)
 
 
-@command("show order", "информация о заказе", CATEGORY_ORDERS, [ROLE_SALES_MANAGER])
+@command("list orders new", "список новых заказов", CATEGORY_INVENTORY_READ, [ROLE_INVENTORY_MANAGER])
+def list_new_orders() -> None:
+    conn = get_conn()
+    with conn.cursor(row_factory=class_row(Order)) as cur:
+        cur.execute(
+            "SELECT o.id, o.status, o.total_amount, o.created_at, o.warehouses_id, o.created_by, o.processed_by"
+            "FROM sales.orders o"
+            "WHERE o.status = 'new'"
+            "ORDER BY o.created_at DESC"
+        )
+        orders: list[Order] = cur.fetchall()
+
+    if not orders:
+        console.print("[yellow]Новых заказов нет.[/yellow]")
+        return
+    console.print("\n[yellow]Новые заказы:[/yellow]")
+    _render_order_list(orders)
+
+
+@command("list orders processing", "список заказов в обработке", CATEGORY_INVENTORY_READ, [ROLE_INVENTORY_MANAGER])
+def list_processing_orders() -> None:
+    conn = get_conn()
+    with conn.cursor(row_factory=class_row(Order)) as cur:
+        cur.execute(
+            "SELECT o.id, o.status, o.total_amount, o.created_at, o.warehouses_id, o.created_by, o.processed_by"
+            "FROM sales.orders o"
+            "WHERE o.status = 'processing'"
+            "ORDER BY o.created_at DESC"
+        )
+        orders: list[Order] = cur.fetchall()
+
+    if not orders:
+        console.print("[yellow]Нет заказов в обработке.[/yellow]")
+        return
+    console.print("\n[yellow]Заказы в обработке:[/yellow]")
+    _render_order_list(orders)
+
+
+@command("list orders my", "список заказов, обрабатываемых мной", CATEGORY_INVENTORY_READ, [ROLE_INVENTORY_MANAGER])
+def list_my_orders() -> None:
+    current_user_id = auth_user().id
+    conn = get_conn()
+    with conn.cursor(row_factory=class_row(Order)) as cur:
+        cur.execute(
+            "SELECT o.id, o.status, o.total_amount, o.created_at, o.warehouses_id, o.created_by, o.processed_by"
+            "FROM sales.orders o"
+            "WHERE o.status IN ('processing', 'pending', 'packing') AND o.processed_by = %s"
+            "ORDER BY o.created_at DESC", (current_user_id,)
+        )
+        orders: list[Order] = cur.fetchall()
+
+    if not orders:
+        console.print("[yellow]Нет заказов, обрабатываемых вами.[/yellow]")
+        return
+    console.print("\n[yellow]Ваши заказы:[/yellow]")
+    _render_order_list(orders)
+
+
+# Для менеджера
+@command("mark order processing", "взять заказ в обработку", CATEGORY_INVENTORY_READ, [ROLE_INVENTORY_MANAGER])
+def mark_order_processing(_id: str) -> None:
+    try:
+        oid: int = int(_id)
+    except ValueError:
+        render_error("ID заказа должен быть числом.")
+        return
+
+    order: Optional[Order] = _get_order_by_id(oid)
+    if not order:
+        render_error(f"Заказ с ID {oid} не найден")
+        return
+    if order.status != "new":
+        render_error(f"Нельзя взять в обработку заказ со статусом '{order.status}'.")
+        return
+
+    _render_order(order)
+
+    answer: bool = yes_no_choice(f"Взять заказ #{oid} в обработку?")
+    if answer:
+        current_user_id = auth_user().id
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE sales.orders"
+                    "SET status = 'processing', processed_by = %s"
+                    "WHERE id = %s AND status = 'new'", (current_user_id, oid)
+                )
+                conn.commit()
+                rows_affected = cur.rowcount
+            if rows_affected == 0:
+                render_error(f"Не удалось взять заказ #{oid} в обработку. Возможно, его уже кто-то взял.")
+            else:
+                console.print(f"[green]Заказ #{oid} взят в обработку.[/green]")
+        except Exception as e:
+            conn.rollback()
+            render_error(f"Ошибка при взятии заказа в обработку: {e}")
+
+
+@command("show order", "информация о заказе", CATEGORY_ORDERS, [ROLE_SALES_MANAGER, ROLE_INVENTORY_MANAGER])
 def show_order(_id: str) -> None:
     try:
         oid: int = int(_id)
@@ -139,12 +236,32 @@ def show_order(_id: str) -> None:
         return
     _render_order(order)
 
+    items = get_order_item_statuses(oid)
+        if items_with_status:
+            _render_order_item_list_with_status(items)
+        else:
+            console.print("[i]В заказе нет позиций.[/i]")
 
-    items: list = _get_order_items_by_order_id(oid)
-    if items:
-        _render_order_item_list(items)
-    else:
-        console.print("[i]В заказе нет позиций.[/i]")
+
+def _render_order_item_list_with_status(items: list) -> None:
+    table = Table(title="Позиции заказа (с вычисленным статусом)", show_header=True, header_style="bold cyan")
+    table.add_column("ID", style="dim", width=8, justify="right")
+    table.add_column("Товар", style="blue", min_width=25)
+    table.add_column("Цена", style="yellow", min_width=10, justify="right")
+    table.add_column("Кол-во", style="magenta", min_width=6, justify="right")
+    table.add_column("Сумма", style="red", min_width=10, justify="right")
+    table.add_column("Статус", style="green", min_width=15)
+
+    for i in items:
+        table.add_row(
+            str(i.get('id', i.id)),
+            f"{i.get('product_name', getattr(i, 'product_name', 'N/A'))} (SKU: {i.get('product_sku', getattr(i, 'product_sku', 'N/A'))})",
+            f"{getattr(i, 'price', i.get('price', 0)):.2f}",
+            str(getattr(i, 'quantity', i.get('quantity', 0))),
+            f"{(getattr(i, 'price', i.get('price', 0)) * getattr(i, 'quantity', i.get('quantity', 0))):.2f}",
+            i.get('calculated_status', getattr(i, 'calculated_status', 'Неизвестно'))
+        )
+    console.print(table)
 
 
 @command("add order", "добавить заказ (интерактивно)", CATEGORY_ORDERS, [ROLE_SALES_MANAGER])
@@ -201,6 +318,10 @@ def edit_order(_id: str) -> None:
         return
     if not _can_modify_order(order.status):
         render_error(f"Нельзя редактировать заказ со статусом '{order.status}'.")
+        if order.processed_by is not None:
+            processor_name = get_username_by_id(order.processed_by)
+            error_msg += f" Заказ уже взят в обработку пользователем {processor_name}."
+        render_error(error_msg)
         return
 
     wh_choices: list[tuple[str, str]] = [(str(wid), disp) for wid, disp in get_warehouse_choices()]
@@ -234,6 +355,10 @@ def delete_order(_id: str) -> None:
         return
     if not _can_modify_order(order.status):
         render_error(f"Нельзя удалить заказ со статусом '{order.status}'.")
+        if order.processed_by is not None:
+            processor_name = get_username_by_id(order.processed_by)
+            error_msg += f" Заказ уже взят в обработку пользователем {processor_name}."
+        render_error(error_msg)
         return
 
     _render_order(order)
@@ -260,7 +385,10 @@ def publish_order(_id: str) -> None:
     if order.status != "unpublished":
         render_error("Публикация возможна только для статуса 'unpublished'.")
         return
-
+    if order.processed_by is not None:
+        processor_name = get_username_by_id(order.processed_by)
+        render_error(f"Невозможно опубликовать заказ, уже взятый в обработку пользователем {processor_name}.")
+        return
 
     if not _get_order_items_by_order_id(oid):
         render_error("Нельзя опубликовать заказ без позиций.")
@@ -269,15 +397,3 @@ def publish_order(_id: str) -> None:
     with get_conn().cursor() as cur:
         cur.execute("UPDATE sales.orders SET status = 'new' WHERE id = %s", (oid,))
     console.print(f"[green]Заказ #{oid} опубликован[/green]")
-
-
-def yes_no_choice(message: str) -> bool:
-    result: str = choice(
-        message=message,
-        options=[
-            ("y", "Да"),
-            ("n", "Нет"),
-        ],
-        default="n"
-    )
-    return result == "y"
