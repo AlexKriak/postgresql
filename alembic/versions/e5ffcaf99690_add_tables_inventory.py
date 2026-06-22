@@ -22,7 +22,7 @@ def upgrade() -> None:
 
     # Создание таблицы inventory.deliveries
     op.execute(
-        "CREATE TABLE inventory.deliveries (
+        "CREATE TABLE inventory.deliveries ("
         "order_id INTEGER PRIMARY KEY,"
         "status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'shipping', 'shipped')),"
         "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),"
