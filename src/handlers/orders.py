@@ -76,12 +76,15 @@ def _render_order_list(orders: list[Order]) -> None:
     table.add_column("Склад", style="green", min_width=20)
     table.add_column("Создано", style="cyan", min_width=15)
     table.add_column("Обрабатывает", style="magenta", min_width=15)
+    table.add_column("Товаров (уникальных)", style="white", min_width=10, justify="right")
 
     for o in orders:
         wh = _get_warehouse_by_id(o.warehouses_id)
         wh_disp: str = f"{wh.city} ({wh.label or 'без метки'})" if wh else str(o.warehouses_id)
+
         creator: str = get_username_by_id(o.created_by)
         processor: str = get_username_by_id(o.processed_by) if o.processed_by else "Не назначен"
+
         table.add_row(
             str(o.id),
             o.status,
@@ -89,7 +92,8 @@ def _render_order_list(orders: list[Order]) -> None:
             o.created_at.strftime("%Y-%m-%d %H:%M"),
             wh_disp,
             creator,
-            processor
+            processor,
+            str(o.unique_items_count)
         )
     console.print(table)
 
@@ -112,8 +116,15 @@ def list_orders() -> None:
     conn = get_conn()
     with conn.cursor(row_factory=class_row(Order)) as cur:
         cur.execute(
-            "SELECT o.id, o.status, o.total_amount, o.created_at, o.warehouses_id, o.created_by, o.processed_by"
-            "FROM sales.orders o ORDER BY o.created_at DESC"
+            "SELECT o.id, o.status, o.total_amount, o.created_at, o.warehouses_id, o.created_by, o.processed_by,"
+            "COALESCE(oi_counts.cnt, 0) AS unique_items_count"
+            "FROM sales.orders o"
+            "LEFT JOIN ("
+            "SELECT orders_id, COUNT(DISTINCT product_id) AS cnt"
+            "FROM sales.order_items"
+            "GROUP BY orders_id"
+            ") oi_counts ON o.id = oi_counts.orders_id"
+            "ORDER BY o.created_at DESC"
         )
         orders: list[Order] = cur.fetchall()
 
@@ -128,8 +139,14 @@ def list_new_orders() -> None:
     conn = get_conn()
     with conn.cursor(row_factory=class_row(Order)) as cur:
         cur.execute(
-            "SELECT o.id, o.status, o.total_amount, o.created_at, o.warehouses_id, o.created_by, o.processed_by"
+            "SELECT o.id, o.status, o.total_amount, o.created_at, o.warehouses_id, o.created_by, o.processed_by,"
+            "COALESCE(oi_counts.cnt, 0) AS unique_items_count"
             "FROM sales.orders o"
+            "LEFT JOIN ("
+            "SELECT orders_id, COUNT(DISTINCT product_id) AS cnt"
+            "FROM sales.order_items"
+            "GROUP BY orders_id"
+            ") oi_counts ON o.id = oi_counts.orders_id"
             "WHERE o.status = 'new'"
             "ORDER BY o.created_at DESC"
         )
@@ -147,8 +164,14 @@ def list_processing_orders() -> None:
     conn = get_conn()
     with conn.cursor(row_factory=class_row(Order)) as cur:
         cur.execute(
-            "SELECT o.id, o.status, o.total_amount, o.created_at, o.warehouses_id, o.created_by, o.processed_by"
+            "SELECT o.id, o.status, o.total_amount, o.created_at, o.warehouses_id, o.created_by, o.processed_by,"
+            "COALESCE(oi_counts.cnt, 0) AS unique_items_count"
             "FROM sales.orders o"
+            "LEFT JOIN ("
+            "SELECT orders_id, COUNT(DISTINCT product_id) AS cnt"
+            "FROM sales.order_items"
+            "GROUP BY orders_id"
+            ") oi_counts ON o.id = oi_counts.orders_id"
             "WHERE o.status = 'processing'"
             "ORDER BY o.created_at DESC"
         )
@@ -167,8 +190,14 @@ def list_my_orders() -> None:
     conn = get_conn()
     with conn.cursor(row_factory=class_row(Order)) as cur:
         cur.execute(
-            "SELECT o.id, o.status, o.total_amount, o.created_at, o.warehouses_id, o.created_by, o.processed_by"
+            "SELECT o.id, o.status, o.total_amount, o.created_at, o.warehouses_id, o.created_by, o.processed_by,"
+            "COALESCE(oi_counts.cnt, 0) AS unique_items_count"
             "FROM sales.orders o"
+            "LEFT JOIN ("
+            "SELECT orders_id, COUNT(DISTINCT product_id) AS cnt"
+            "FROM sales.order_items"
+            "GROUP BY orders_id"
+            ") oi_counts ON o.id = oi_counts.orders_id"
             "WHERE o.status IN ('processing', 'pending', 'packing') AND o.processed_by = %s"
             "ORDER BY o.created_at DESC", (current_user_id,)
         )
@@ -236,9 +265,9 @@ def show_order(_id: str) -> None:
         return
     _render_order(order)
 
-    items = get_order_item_statuses(oid)
+    items_with_status = get_order_item_statuses(oid)
         if items_with_status:
-            _render_order_item_list_with_status(items)
+            _render_order_item_list_with_status(items_with_status)
         else:
             console.print("[i]В заказе нет позиций.[/i]")
 

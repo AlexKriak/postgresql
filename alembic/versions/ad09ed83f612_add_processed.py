@@ -18,7 +18,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.execute("ALTER TABLE sales.orders ADD COLUMN processed_by INTEGER;")-
+    op.execute("ALTER TABLE sales.orders ADD COLUMN processed_by INTEGER;")
     op.execute(
         "ALTER TABLE sales.orders"
         "ADD CONSTRAINT fk_orders_users_processed_by"
