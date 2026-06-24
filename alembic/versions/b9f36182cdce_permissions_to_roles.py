@@ -45,7 +45,7 @@ def upgrade() -> None:
 
     #Доступ для всех ролей, включая будущие
     op.execute("GRANT USAGE ON SCHEMA catalog TO PUBLIC;")
-    op.execute("GRANT SELECT ON ALL TABLES IN SCHEMA catalog TO PUBLIC;") # Исправлено TABLE -> TABLES
+    op.execute("GRANT SELECT ON ALL TABLES IN SCHEMA catalog TO PUBLIC;")
     op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog GRANT SELECT ON TABLES TO PUBLIC;")
 
 
