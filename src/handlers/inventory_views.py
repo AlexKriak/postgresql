@@ -5,6 +5,7 @@ from prompt_toolkit.shortcuts import choice
 from psycopg.rows import class_row
 from rich.panel import Panel
 from rich.table import Table
+from prompt_toolkit.completion import FuzzyWordCompleter
 
 from console import console, render_error
 from db import get_conn
@@ -101,45 +102,41 @@ def _calculate_item_status(item: OrderItemWithStatus, order_status: str, process
             # Проверяем, есть ли товар в пути
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT SUM(ti.quantity), MIN(t.arriving_at)"
-                    "FROM inventory.transfer_items ti"
+                    "SELECT 1 FROM inventory.transfer_items ti"
                     "JOIN inventory.transfers t ON ti.transfer_id = t.id"
                     "WHERE ti.product_id = %s"
                     "AND t.to_warehouse_id = %s"
                     "AND t.status IN ('planned', 'shipping', 'in_transit')"
                     "AND ti.reserve_id IN ("
                     "SELECT r.id FROM inventory.reserves r"
-                    "WHERE r.order_id = %s AND r.product_id = %s AND r.warehouse_id = %s"
+                    "WHERE r.order_id = %s AND r.product_id = %s"
                     ")", (product_id, order_warehouse_id, item.orders_id, product_id, order_warehouse_id)
                 )
-                pending_result = cur.fetchone()
-                pending_qty = pending_result[0] if pending_result[0] is not None else 0
-                earliest_arrival = pending_result[1]
+                exists_pending_transfer = cur.fetchone()
 
-            if pending_qty > 0:
+            if exists_pending_transfer:
+                with conn.cursor() as cur_time:
+                    cur_time.execute(
+                        "SELECT MIN(t.arriving_at)"
+                        "FROM inventory.transfer_items ti"
+                        "JOIN inventory.transfers t ON ti.transfer_id = t.id"
+                        "WHERE ti.product_id = %s"
+                        "AND t.to_warehouse_id = %s"
+                        "AND t.status IN ('planned', 'shipping', 'in_transit')"
+                        "AND ti.reserve_id IN ("
+                        "SELECT r.id FROM inventory.reserves r"
+                        "WHERE r.order_id = %s AND r.product_id = %s"
+                        ")", (product_id, order_warehouse_id, item.orders_id, product_id)
+                    )
+                    earliest_arrival = cur_time.fetchone()[0]
+
                 arrival_str = f", ожидается до {earliest_arrival.strftime('%Y-%m-%d %H:%M')}" if earliest_arrival else ""
-                return f'в пути (+{pending_qty} шт.{arrival_str})'
+                return f'в пути (ожидается до {earliest_arrival}{arrival_str})' if earliest_arrival else 'в пути'
             else:
                 return 'ожидает обработки'
 
     elif order_status == 'packing':
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT status FROM inventory.delivery_items"
-                "WHERE order_id = %s AND product_id = %s", (item.orders_id, product_id)
-            )
-            delivery_statuses = [row[0] for row in cur.fetchall()]
-
-        if 'shipped' in delivery_statuses:
-            return 'отгружено'
-        elif 'planned' in delivery_statuses:
-            return 'запланирована отгрузка'
-        else:
-            if not delivery_statuses or (not any(ds in ['planned', 'shipped'] for ds in delivery_statuses)):
-                 if 'planned' in delivery_statuses:
-                     return 'запланирована отгрузка'
-                 else:
-                     return 'в резерве'
+        return 'запланирована отгрузка'
 
     elif order_status == 'shipped':
         return 'отгружено'
@@ -199,7 +196,7 @@ def view_warehouse_stock(_id: Optional[str] = None) -> None:
 
 
 @command("view product stock", "просмотр остатков товара на складах", CATEGORY_INVENTORY_READ, [ROLE_INVENTORY_MANAGER, ROLE_WORKER])
-def view_product_stock(_id: Optional[str] = None) -> None: # _id может быть None
+def view_product_stock(_id: Optional[str] = None) -> None:
     product_id = None
     if _id:
         try:
@@ -211,24 +208,34 @@ def view_product_stock(_id: Optional[str] = None) -> None: # _id может бы
     if not product_id:
         conn = get_conn()
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, name, sku FROM catalog.products ORDER BY name LIMIT 50"
-            )
-            product_rows = cur.fetchall()
-        if not product_rows:
-            console.print("[yellow]Нет доступных товаров.[/yellow]")
-            return
-        choices = [(str(pid), f"{pname} (SKU: {psku})") for pid, pname, psku in product_rows]
-        selected_prod_id_str = choice(
-            message="Выберите товар: ",
-            options=choices,
-            default=choices[0][0]
-        )
-        try:
-            product_id = int(selected_prod_id_str)
-        except ValueError:
+            cur.execute("SELECT sku, name FROM catalog.products ORDER BY id DESC")
+            products_data = cur.fetchall()
+        products_for_completer = [f"{sku} - {name}" for sku, name in products_data]
+
+        completer = FuzzyWordCompleter(products_for_completer, match_middle=True)
+        selected = prompt(
+            "Выберите товар (введите часть SKU/названия, Tab для автодополнения): ",
+            completer=completer,
+            complete_while_typing=True,
+        ).strip()
+
+        if not selected:
             render_error("Товар не выбран.")
             return
+
+        parts = selected.split(' - ', 1)
+        if len(parts) < 2:
+            render_error(f"Не удалось распознать выбранный товар: '{selected}'")
+            return
+
+        sku, name_part = parts[0], parts[1]
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM catalog.products WHERE sku = %s", (sku,))
+            result = cur.fetchone()
+            if not result:
+                render_error(f"Товар с SKU '{sku}' не найден.")
+                return
+            product_id = result[0]
 
     conn = get_conn()
     table = Table(title=f"Остатки товара #{product_id} на складах", show_header=True, header_style="bold cyan")

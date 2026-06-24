@@ -22,7 +22,7 @@ def upgrade() -> None:
 
     # Создание таблицы inventory.deliveries
     op.execute(
-        "CREATE TABLE inventory.deliveries (
+        "CREATE TABLE inventory.deliveries ("
         "order_id INTEGER PRIMARY KEY,"
         "status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'shipping', 'shipped')),"
         "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),"
@@ -72,7 +72,6 @@ def upgrade() -> None:
     # Создание таблицы delivery_items
     op.execute(
         "CREATE TABLE inventory.delivery_items ("
-        "id SERIAL PRIMARY KEY,"
         "order_id INTEGER NOT NULL,"
         "product_id INTEGER NOT NULL,"
         "quantity INTEGER NOT NULL CHECK (quantity > 0),"
@@ -80,7 +79,8 @@ def upgrade() -> None:
         "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),"
         "shipped_at TIMESTAMPTZ,"
         "FOREIGN KEY (order_id) REFERENCES sales.orders(id),"
-        "FOREIGN KEY (product_id) REFERENCES catalog.products(id)"
+        "FOREIGN KEY (product_id) REFERENCES catalog.products(id),"
+        "PRIMARY KEY(order_id, product_id)"
         ");"
     )
 
