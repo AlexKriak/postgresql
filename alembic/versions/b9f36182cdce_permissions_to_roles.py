@@ -20,15 +20,15 @@ def upgrade() -> None:
     # Выдача прав catalog_manager на схему catalog и на будущие таблицы
     op.execute("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA catalog TO catalog_manager;")
     op.execute("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA catalog TO catalog_manager;")
-    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog GRANT ALL ON TABLES TO catalog_manager;")
-    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog GRANT ALL ON SEQUENCES TO catalog_manager;")
+    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog GRANT ALL PRIVILEGES ON TABLES TO catalog_manager;")
+    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog GRANT ALL PRIVILEGES ON SEQUENCES TO catalog_manager;")
 
     # Выдача прав sales_manager на схему sales и на будущие таблицы
     op.execute("GRANT USAGE ON SCHEMA sales TO sales_manager;")
     op.execute("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA sales TO sales_manager;")
     op.execute("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA sales TO sales_manager;")
-    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA sales GRANT ALL ON TABLES TO sales_manager;")
-    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA sales GRANT ALL ON SEQUENCES TO sales_manager;")
+    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA sales GRANT ALL PRIVILEGES ON TABLES TO sales_manager;")
+    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA sales GRANT ALL PRIVILEGES ON SEQUENCES TO sales_manager;")
 
     # Выдача прав sales_manager на чтение схемы catalog и на будущие таблицы
     op.execute("GRANT USAGE ON SCHEMA catalog TO sales_manager;")
@@ -36,22 +36,26 @@ def upgrade() -> None:
     op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog GRANT SELECT ON TABLES TO sales_manager;")
 
     # Выдача прав catalog_manager и sales_manager на схему auth (чтение) и на будущие таблицы
+    op.execute("GRANT USAGE ON SCHEMA catalog TO sales_manager;")
+    op.execute("GRANT SELECT ON ALL TABLES IN SCHEMA catalog TO sales_manager;")
+    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog GRANT SELECT ON TABLES TO sales_manager;")
     op.execute("GRANT USAGE ON SCHEMA auth TO catalog_manager, sales_manager;")
     op.execute("GRANT SELECT ON ALL TABLES IN SCHEMA auth TO catalog_manager, sales_manager;")
     op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT SELECT ON TABLES TO catalog_manager, sales_manager;")
 
     #Доступ для всех ролей, включая будущие
     op.execute("GRANT USAGE ON SCHEMA catalog TO PUBLIC;")
-    op.execute("GRANT SELECT ON ALL TABLE IN SCHEMA catalog TO PUBLIC")
-    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog SELECT ON TABLES TO PUBLIC")
+    op.execute("GRANT SELECT ON ALL TABLES IN SCHEMA catalog TO PUBLIC;") # Исправлено TABLE -> TABLES
+    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog GRANT SELECT ON TABLES TO PUBLIC;") # Добавлено GRANT
+
 
 def downgrade() -> None:
     # Отзыв прав
-    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog REVOKE ALL ON TABLES FROM catalog_manager, sales_manager;")
-    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog REVOKE ALL ON TABLES FROM sales_manager;")
-    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog REVOKE ALL ON SEQUENCES FROM catalog_manager;")
-    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA sales REVOKE ALL ON TABLES FROM sales_manager;")
-    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA sales REVOKE ALL ON SEQUENCES FROM sales_manager;")
+    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog REVOKE ALL PRIVILEGES ON TABLES FROM catalog_manager, sales_manager;") # Исправлено ALL -> ALL PRIVILEGES
+    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog REVOKE ALL PRIVILEGES ON TABLES FROM sales_manager;") # Исправлено ALL -> ALL PRIVILEGES
+    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog REVOKE ALL PRIVILEGES ON SEQUENCES FROM catalog_manager;") # Исправлено ALL -> ALL PRIVILEGES
+    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA sales REVOKE ALL PRIVILEGES ON TABLES FROM sales_manager;") # Исправлено ALL -> ALL PRIVILEGES
+    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA sales REVOKE ALL PRIVILEGES ON SEQUENCES FROM sales_manager;") # Исправлено ALL -> ALL PRIVILEGES
     op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA auth REVOKE SELECT ON TABLES FROM catalog_manager, sales_manager;")
 
     op.execute("REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA catalog FROM catalog_manager;")

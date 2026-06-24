@@ -219,35 +219,60 @@ def mark_order_processing(_id: str) -> None:
         render_error("ID заказа должен быть числом.")
         return
 
-    order: Optional[Order] = _get_order_by_id(oid)
-    if not order:
-        render_error(f"Заказ с ID {oid} не найден")
-        return
-    if order.status != "new":
-        render_error(f"Нельзя взять в обработку заказ со статусом '{order.status}'.")
-        return
+    current_user_id = auth_user().id
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("BEGIN;")
+            cur.execute(
+                "SELECT status, processed_by"
+                "FROM sales.orders"
+                "WHERE id = %s FOR UPDATE;", (oid,)
+            )
+            order_row = cur.fetchone()
 
-    _render_order(order)
+            if not order_row:
+                render_error(f"Заказ с ID {oid} не найден")
+                cur.execute("ROLLBACK;")
+                return
 
-    answer: bool = yes_no_choice(f"Взять заказ #{oid} в обработку?")
-    if answer:
-        current_user_id = auth_user().id
-        conn = get_conn()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE sales.orders"
-                    "SET status = 'processing', processed_by = %s"
-                    "WHERE id = %s AND status = 'new'", (current_user_id, oid)
-                )
-                conn.commit()
-                rows_affected = cur.rowcount
+            order_status, current_processed_by = order_row
+
+            if order_status != "new":
+                render_error(f"Нельзя взять в обработку заказ со статусом '{order_status}'.")
+                cur.execute("ROLLBACK;")
+                return
+
+            if current_processed_by is not None and current_processed_by != current_user_id:
+                 render_error(f"Нельзя взять в обработку заказ, уже взятый пользователем ID {current_processed_by}.")
+                 cur.execute("ROLLBACK;")
+                 return
+
+            console.print(f"Проверка заказа #{oid} (статус: {order_status})")
+
+            answer: bool = yes_no_choice(f"Взять заказ #{oid} в обработку?")
+            if not answer:
+                cur.execute("ROLLBACK;")
+                console.print("[yellow]Действие отменено.[/yellow]")
+                return
+
+            cur.execute(
+                "UPDATE sales.orders"
+                "SET status = 'processing', processed_by = %s"
+                "WHERE id = %s AND status = 'new'", (current_user_id, oid)
+            )
+
+            rows_affected = cur.rowcount
             if rows_affected == 0:
                 render_error(f"Не удалось взять заказ #{oid} в обработку. Возможно, его уже кто-то взял.")
+                cur.execute("ROLLBACK;")
             else:
+                cur.execute("COMMIT;")
                 console.print(f"[green]Заказ #{oid} взят в обработку.[/green]")
+
         except Exception as e:
-            conn.rollback()
+            with conn.cursor() as cur:
+                cur.execute("ROLLBACK;")
             render_error(f"Ошибка при взятии заказа в обработку: {e}")
 
 
@@ -346,7 +371,7 @@ def edit_order(_id: str) -> None:
         render_error(f"Заказ с ID {oid} не найден")
         return
     if not _can_modify_order(order.status):
-        render_error(f"Нельзя редактировать заказ со статусом '{order.status}'.")
+        error_msg = f"Нельзя редактировать заказ со статусом '{order.status}'."
         if order.processed_by is not None:
             processor_name = get_username_by_id(order.processed_by)
             error_msg += f" Заказ уже взят в обработку пользователем {processor_name}."
@@ -383,7 +408,7 @@ def delete_order(_id: str) -> None:
         render_error(f"Заказ с ID {oid} не найден")
         return
     if not _can_modify_order(order.status):
-        render_error(f"Нельзя удалить заказ со статусом '{order.status}'.")
+        error_msg = f"Нельзя удалить заказ со статусом '{order.status}'."
         if order.processed_by is not None:
             processor_name = get_username_by_id(order.processed_by)
             error_msg += f" Заказ уже взят в обработку пользователем {processor_name}."

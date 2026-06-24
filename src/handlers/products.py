@@ -54,12 +54,12 @@ def list_products() -> None:
     table.add_column("Категория", style="magenta", min_width=15)
 
     with conn.cursor(row_factory=class_row(Product)) as cur:
-        cur.execute("""
-            SELECT p.id, p.sku, p.name, p.price, p.category_id, pc.name as category_name
-            FROM catalog.products p
-            JOIN catalog.product_categories pc ON p.category_id = pc.id
-            ORDER BY p.name
-        """)
+        cur.execute(
+            "SELECT p.id, p.sku, p.name, p.price, p.category_id, pc.name as category_name"
+            "FROM catalog.products p"
+            "JOIN catalog.product_categories pc ON p.category_id = pc.id"
+            "ORDER BY p.name"
+        )
         products: list[Product] = cur.fetchall()
 
     for p in products:
@@ -83,12 +83,12 @@ def show_product(_id: str) -> None:
 
     conn = get_conn()
     with conn.cursor(row_factory=class_row(Product)) as cur:
-        cur.execute("""
-            SELECT p.id, p.sku, p.name, p.price, p.category_id, pc.name as category_name
-            FROM catalog.products p
-            JOIN catalog.product_categories pc ON p.category_id = pc.id
-            WHERE p.id = %s
-        """, (pid,))
+        cur.execute(
+            "SELECT p.id, p.sku, p.name, p.price, p.category_id, pc.name as category_name"
+            "FROM catalog.products p"
+            "JOIN catalog.product_categories pc ON p.category_id = pc.id"
+            "WHERE p.id = %s", (pid,)
+        )
         p: Product | None = cur.fetchone()
 
     if not p:
@@ -145,12 +145,12 @@ def edit_product(_id: str) -> None:
 
     conn = get_conn()
     with conn.cursor(row_factory=class_row(Product)) as cur:
-        cur.execute("""
-            SELECT p.id, p.sku, p.name, p.price, p.category_id, pc.name as category_name
-            FROM catalog.products p
-            JOIN catalog.product_categories pc ON p.category_id = pc.id
-            WHERE p.id = %s
-        """, (pid,))
+        cur.execute(
+            "SELECT p.id, p.sku, p.name, p.price, p.category_id, pc.name as category_name"
+            "FROM catalog.products p"
+            "JOIN catalog.product_categories pc ON p.category_id = pc.id"
+            "WHERE p.id = %s", (pid,)
+        )
         p: Product | None = cur.fetchone()
 
     if not p:
@@ -198,12 +198,12 @@ def delete_product(_id: str) -> None:
 
     conn = get_conn()
     with conn.cursor(row_factory=class_row(Product)) as cur:
-        cur.execute("""
-            SELECT p.id, p.sku, p.name, p.price, p.category_id, pc.name as category_name
-            FROM catalog.products p
-            JOIN catalog.product_categories pc ON p.category_id = pc.id
-            WHERE p.id = %s
-        """, (pid,))
+        cur.execute(
+            "SELECT p.id, p.sku, p.name, p.price, p.category_id, pc.name as category_name"
+            "FROM catalog.products p"
+            "JOIN catalog.product_categories pc ON p.category_id = pc.id"
+            "WHERE p.id = %s", (pid,)
+        )
         p: Product | None = cur.fetchone()
 
     if not p:

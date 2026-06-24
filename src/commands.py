@@ -15,6 +15,8 @@ CATEGORY_ORDERS: Final[str] = "ЗАКАЗЫ"
 CATEGORY_ORDERS_ITEMS: Final[str] = "ПОЗИЦИЯ ЗАКАЗА"
 CATEGORY_ROUTES: Final[str] = "МАРШРУТЫ"
 CATEGORY_INVENTORY_READ: Final[str] = "ИНВЕНТАРИЗАЦИЯ (ЧТЕНИЕ)"
+CATEGORY_INVENTORY_TRANSFERS: Final[str] = "ИНВЕНТАРИЗАЦИЯ (ПЕРЕМЕЩЕНИЯ)"
+CATEGORY_INVENTORY_TRANSFER_ITEMS: Final[str] = "ИНВЕНТАРИЗАЦИЯ (ПОЗИЦИИ ПЕРЕМЕЩЕНИЯ)"
 
 CATEGORIES: Final[Sequence[str]] = [
     CATEGORY_PRODUCTS,
@@ -25,6 +27,8 @@ CATEGORIES: Final[Sequence[str]] = [
     CATEGORY_ORDER_ITEMS,
     CATEGORY_ROUTES,
     CATEGORY_INVENTORY_READ,
+    CATEGORY_INVENTORY_TRANSFERS,
+    CATEGORY_INVENTORY_TRANSFER_ITEMS,
 ]
 
 

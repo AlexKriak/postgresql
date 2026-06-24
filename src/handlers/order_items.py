@@ -69,25 +69,24 @@ def _render_order_item_list(items: list[OrderItem]) -> None:
 def _get_order_items_by_order_id(oid: int) -> list[OrderItem]:
     conn = get_conn()
     with conn.cursor(row_factory=class_row(OrderItem)) as cur:
-        cur.execute("""
-            SELECT oi.id, oi.product_id, oi.price, oi.quantity, oi.orders_id,
-                   p.sku, p.name
-            FROM sales.order_items oi
-            JOIN catalog.products p ON oi.product_id = p.id
-            WHERE oi.orders_id = %s
-            ORDER BY oi.id
-        """, (oid,))
+        cur.execute(
+            "SELECT oi.id, oi.product_id, oi.price, oi.quantity, oi.orders_id, p.sku, p.name"
+            "FROM sales.order_items oi"
+            "JOIN catalog.products p ON oi.product_id = p.id"
+            "WHERE oi.orders_id = %s"
+            "ORDER BY oi.id", (oid,)
+        )
         return cur.fetchall()
 
 
 def _update_order_total(oid: int) -> None:
     conn = get_conn()
     with conn.cursor() as cur:
-        cur.execute("""
-            UPDATE sales.orders
-            SET total_amount = COALESCE((SELECT SUM(price * quantity) FROM sales.order_items WHERE orders_id = %s), 0)
-            WHERE id = %s
-        """, (oid, oid))
+        cur.execute(
+            "UPDATE sales.orders"
+            "SET total_amount = COALESCE((SELECT SUM(price * quantity) FROM sales.order_items WHERE orders_id = %s), 0)"
+            "WHERE id = %s", (oid, oid)
+        )
 
 
 def _get_product_completer(exclude_product_ids: list[int]) -> FuzzyWordCompleter:
@@ -136,14 +135,14 @@ def add_order_item_interactive(oid: int) -> None:
     if len(parts) < 2:
         # Поиск по SKU или названию напрямую
         with conn.cursor(row_factory=class_row(Product)) as cur:
-            cur.execute("""
-                SELECT id, sku, name, price
-                FROM catalog.products
-                WHERE sku ILIKE %s OR name ILIKE %s
-                AND id NOT IN (%s)
-                ORDER BY CASE WHEN sku ILIKE %s THEN 1 ELSE 2 END
-                LIMIT 1
-            """, (selected, selected, ",".join(map(str, existing_product_ids)) if existing_product_ids else "-1", selected))
+            cur.execute(
+                "SELECT id, sku, name, price"
+                "FROM catalog.products"
+                "WHERE sku ILIKE %s OR name ILIKE %s"
+                "AND id NOT IN (%s)"
+                "ORDER BY CASE WHEN sku ILIKE %s THEN 1 ELSE 2 END"
+                "LIMIT 1", (selected, selected, ",".join(map(str, existing_product_ids)) if existing_product_ids else "-1", selected)
+            )
             prod: Optional[Product] = cur.fetchone()
         if not prod:
             render_error(f"Товар '{selected}' не найден или уже добавлен в заказ.")
@@ -151,24 +150,24 @@ def add_order_item_interactive(oid: int) -> None:
     else:
         sku, name_part = parts[0], parts[1]
         with conn.cursor(row_factory=class_row(Product)) as cur:
-            cur.execute("""
-                SELECT id, sku, name, price
-                FROM catalog.products
-                WHERE sku = %s AND name ILIKE %s
-                AND id NOT IN (%s)
-                LIMIT 1
-            """, (sku, f"%{name_part}%", ",".join(map(str, existing_product_ids)) if existing_product_ids else "-1"))
+            cur.execute(
+                "SELECT id, sku, name, price"
+                "FROM catalog.products"
+                "WHERE sku = %s AND name ILIKE %s"
+                "AND id NOT IN (%s)"
+                "LIMIT 1", (sku, f"%{name_part}%", ",".join(map(str, existing_product_ids)) if existing_product_ids else "-1")
+            )
             prod = cur.fetchone()
         if not prod:
             # Повторная попытка без фильтрации по name_part
             with conn.cursor(row_factory=class_row(Product)) as cur:
-                cur.execute("""
-                    SELECT id, sku, name, price
-                    FROM catalog.products
-                    WHERE sku ILIKE %s OR name ILIKE %s
-                    AND id NOT IN (%s)
-                    LIMIT 1
-                """, (sku, name_part, ",".join(map(str, existing_product_ids)) if existing_product_ids else "-1"))
+                cur.execute(
+                    "SELECT id, sku, name, price"
+                    "FROM catalog.products"
+                    "WHERE sku ILIKE %s OR name ILIKE %s"
+                    "AND id NOT IN (%s)"
+                    "LIMIT 1", (sku, name_part, ",".join(map(str, existing_product_ids)) if existing_product_ids else "-1")
+                )
                 prod = cur.fetchone()
             if not prod:
                 render_error(f"Товар '{selected}' не найден или уже добавлен в заказ.")

@@ -110,7 +110,7 @@ def _calculate_item_status(item: OrderItemWithStatus, order_status: str, process
                     "AND ti.reserve_id IN ("
                     "SELECT r.id FROM inventory.reserves r"
                     "WHERE r.order_id = %s AND r.product_id = %s"
-                    ")", (product_id, order_warehouse_id, item.orders_id, product_id, order_warehouse_id)
+                    ")", (product_id, order_warehouse_id, item.orders_id, product_id)
                 )
                 exists_pending_transfer = cur.fetchone()
 

@@ -64,12 +64,12 @@ def list_warehouses() -> None:
     table.add_column("Центральный", style="red", min_width=10)
 
     with conn.cursor(row_factory=class_row(Warehouse)) as cur:
-            cur.execute("""
-                SELECT w.id, w.city_id, c.name as city_name, w.address, w.label, w.is_central
-                FROM catalog.warehouses w
-                JOIN catalog.cities c ON w.city_id = c.id
-                ORDER BY c.name
-            """)
+            cur.execute(
+                "SELECT w.id, w.city_id, c.name as city_name, w.address, w.label, w.is_central"
+                "FROM catalog.warehouses w"
+                "JOIN catalog.cities c ON w.city_id = c.id"
+                "ORDER BY c.name"
+            )
             warehouses: list[Warehouse] = cur.fetchall()
 
     for w in warehouses:
@@ -93,12 +93,12 @@ def show_warehouse(_id: str) -> None:
 
     conn = get_conn()
     with conn.cursor(row_factory=class_row(Warehouse)) as cur:
-        cur.execute("""
-                    SELECT w.id, w.city_id, c.name as city_name, w.address, w.label, w.is_central
-                    FROM catalog.warehouses w
-                    JOIN catalog.cities c ON w.city_id = c.id
-                    WHERE w.id = %s
-                """, (wid,))
+        cur.execute(
+            "SELECT w.id, w.city_id, c.name as city_name, w.address, w.label, w.is_central"
+            "FROM catalog.warehouses w"
+            "JOIN catalog.cities c ON w.city_id = c.id"
+            "WHERE w.id = %s", (wid,)
+        )
         w: Optional[Warehouse] = cur.fetchone()
 
     if not w:
@@ -163,12 +163,12 @@ def edit_warehouse(_id: str) -> None:
 
     conn = get_conn()
     with conn.cursor(row_factory=class_row(Warehouse)) as cur:
-        cur.execute("""
-            SELECT w.id, w.city_id, c.name as city_name, w.address, w.label, w.is_central
-            FROM catalog.warehouses w
-            JOIN catalog.cities c ON w.city_id = c.id
-            WHERE w.id = %s
-        """, (wid,))
+        cur.execute(
+            "SELECT w.id, w.city_id, c.name as city_name, w.address, w.label, w.is_central"
+            "FROM catalog.warehouses w"
+            "JOIN catalog.cities c ON w.city_id = c.id"
+            "WHERE w.id = %s", (wid,)
+        )
         w: Optional[Warehouse] = cur.fetchone()
 
     if not w:
@@ -220,12 +220,12 @@ def delete_warehouse(_id: str) -> None:
 
     conn = get_conn()
     with conn.cursor(row_factory=class_row(Warehouse)) as cur:
-        cur.execute("""
-            SELECT w.id, w.city_id, c.name as city_name, w.address, w.label, w.is_central
-            FROM catalog.warehouses w
-            JOIN catalog.cities c ON w.city_id = c.id
-            WHERE w.id = %s
-        """, (wid,))
+        cur.execute(
+            "SELECT w.id, w.city_id, c.name as city_name, w.address, w.label, w.is_central"
+            "FROM catalog.warehouses w"
+            "JOIN catalog.cities c ON w.city_id = c.id"
+            "WHERE w.id = %s", (wid,)
+        )
         w: Optional[Warehouse] = cur.fetchone()
 
     if not w:
