@@ -10,11 +10,11 @@ from validators import YesNoValidator
 def get_warehouse_choices() -> list[tuple[int, str]]:
     conn = get_conn()
     with conn.cursor() as cur:
-        cur.execute("""
-            SELECT id, city || ' (' || COALESCE(label, '') || ')' AS display
-            FROM catalog.warehouses
-            ORDER BY city, label
-        """)
+        cur.execute(
+            "SELECT w.id, w.city_name || ' (' || COALESCE(w.label, '') || ')' AS display"
+            "FROM catalog.warehouses w"
+            "ORDER BY w.city_name, w.label"
+        )
         return cur.fetchall()
 
 #Возвращает список (id, name) для выбора категории
@@ -63,3 +63,13 @@ def yes_no_choice(message: str) -> bool:
         validator=YesNoValidator()
     )
     return result == "y"
+
+
+# Получить имя пользователя по идентификатору
+def get_username_by_id(uid: int) -> str:
+    try:
+        u = get_user(uid)
+        return u.username
+    except Exception:
+        return f"UID:{uid}"
+
