@@ -46,16 +46,16 @@ def upgrade() -> None:
     #Доступ для всех ролей, включая будущие
     op.execute("GRANT USAGE ON SCHEMA catalog TO PUBLIC;")
     op.execute("GRANT SELECT ON ALL TABLES IN SCHEMA catalog TO PUBLIC;") # Исправлено TABLE -> TABLES
-    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog GRANT SELECT ON TABLES TO PUBLIC;") # Добавлено GRANT
+    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog GRANT SELECT ON TABLES TO PUBLIC;")
 
 
 def downgrade() -> None:
     # Отзыв прав
-    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog REVOKE ALL PRIVILEGES ON TABLES FROM catalog_manager, sales_manager;") # Исправлено ALL -> ALL PRIVILEGES
-    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog REVOKE ALL PRIVILEGES ON TABLES FROM sales_manager;") # Исправлено ALL -> ALL PRIVILEGES
-    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog REVOKE ALL PRIVILEGES ON SEQUENCES FROM catalog_manager;") # Исправлено ALL -> ALL PRIVILEGES
-    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA sales REVOKE ALL PRIVILEGES ON TABLES FROM sales_manager;") # Исправлено ALL -> ALL PRIVILEGES
-    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA sales REVOKE ALL PRIVILEGES ON SEQUENCES FROM sales_manager;") # Исправлено ALL -> ALL PRIVILEGES
+    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog REVOKE ALL PRIVILEGES ON TABLES FROM catalog_manager, sales_manager;")
+    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog REVOKE ALL PRIVILEGES ON TABLES FROM sales_manager;")
+    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA catalog REVOKE ALL PRIVILEGES ON SEQUENCES FROM catalog_manager;")
+    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA sales REVOKE ALL PRIVILEGES ON TABLES FROM sales_manager;")
+    op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA sales REVOKE ALL PRIVILEGES ON SEQUENCES FROM sales_manager;")
     op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA auth REVOKE SELECT ON TABLES FROM catalog_manager, sales_manager;")
 
     op.execute("REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA catalog FROM catalog_manager;")
