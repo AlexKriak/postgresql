@@ -1,10 +1,14 @@
 # src/helpers.py
 from db import get_conn
-from psycopg.rows import class_row
+from psycopg.rows import class_row, Row
 from src.handlers.products import Product
 from src.handlers.warehouses import Warehouse
 from prompt_toolkit.shortcuts import choice
 from validators import YesNoValidator
+import psycopg.errors as pg_errors
+from dataclasses import dataclass
+import datetime
+from typing import Optional
 
 #Возвращает список (id, display_name) для выбора склада
 def get_warehouse_choices() -> list[tuple[int, str]]:
@@ -73,3 +77,87 @@ def get_username_by_id(uid: int) -> str:
     except Exception:
         return f"UID:{uid}"
 
+
+@dataclass
+class Transfer:
+    id: int
+    from_warehouse_id: int
+    to_warehouse_id: int
+    status: str
+    created_at: datetime.datetime
+    started_at: Optional[datetime.datetime]
+    arriving_at: Optional[datetime.datetime]
+    received_at: Optional[datetime.datetime]
+    from_city_name: str
+    from_label: str
+    to_city_name: str
+    to_label: str
+
+# Получает информацию о перемещении по ID
+def _get_transfer_by_id(tid: int) -> Optional[Transfer]:
+    conn = get_conn()
+    with conn.cursor(row_factory=class_row(Transfer)) as cur:
+        cur.execute("""
+            SELECT t.id, t.from_warehouse_id, t.to_warehouse_id, t.status,
+                   t.created_at, t.started_at, t.arriving_at, t.received_at,
+                   fw.city_name as from_city_name, fw.label as from_label,
+                   tw.city_name as to_city_name, tw.label as to_label
+            FROM inventory.transfers t
+            JOIN catalog.warehouses fw ON t.from_warehouse_id = fw.id
+            JOIN catalog.warehouses tw ON t.to_warehouse_id = tw.id
+            WHERE t.id = %s
+        """, (tid,))
+        return cur.fetchone()
+
+# Находит существующий перемещение со статусом 'planned' между указанными складами или создаёт новое, если такого нет, с учетом гонки
+def _get_or_create_planned_transfer(from_warehouse_id: int, to_warehouse_id: int) -> Optional[Transfer]:
+    conn = get_conn()
+    with conn:
+        with conn.transaction():
+            with conn.cursor(row_factory=class_row(Transfer)) as cur:
+                cur.execute("""
+                    SELECT t.id, t.from_warehouse_id, t.to_warehouse_id, t.status,
+                           t.created_at, t.started_at, t.arriving_at, t.received_at,
+                           fw.city_name as from_city_name, fw.label as from_label,
+                           tw.city_name as to_city_name, tw.label as to_label
+                    FROM inventory.transfers t
+                    JOIN catalog.warehouses fw ON t.from_warehouse_id = fw.id
+                    JOIN catalog.warehouses tw ON t.to_warehouse_id = tw.id
+                    WHERE t.from_warehouse_id = %s AND t.to_warehouse_id = %s AND t.status = 'planned'
+                    FOR UPDATE;
+                """, (from_warehouse_id, to_warehouse_id))
+                existing_transfer = cur.fetchone()
+
+                if existing_transfer:
+                    return existing_transfer
+
+                # Если не нашли, пытаемся создать новый
+                try:
+                    cur.execute("""
+                        INSERT INTO inventory.transfers (from_warehouse_id, to_warehouse_id, status)
+                        VALUES (%s, %s, 'planned')
+                        ON CONFLICT (from_warehouse_id, to_warehouse_id) WHERE status = 'planned'
+                        DO UPDATE SET status = EXCLUDED.status
+                        RETURNING t.id;
+                    """, (from_warehouse_id, to_warehouse_id))
+                    inserted_id_row = cur.fetchone()
+                    if inserted_id_row:
+                         inserted_id = inserted_id_row[0]
+                         # Получаем полную информацию о вставленном/найденном трансфере
+                         cur.execute("""
+                            SELECT t.id, t.from_warehouse_id, t.to_warehouse_id, t.status,
+                                   t.created_at, t.started_at, t.arriving_at, t.received_at,
+                                   fw.city_name as from_city_name, fw.label as from_label,
+                                   tw.city_name as to_city_name, tw.label as to_label
+                            FROM inventory.transfers t
+                            JOIN catalog.warehouses fw ON t.from_warehouse_id = fw.id
+                            JOIN catalog.warehouses tw ON t.to_warehouse_id = tw.id
+                            WHERE t.id = %s;
+                        """, (inserted_id,))
+                         return cur.fetchone()
+                except Exception as e:
+                    from console import render_error
+                    render_error(f"Ошибка при создании перемещения: {e}")
+                    return None
+
+    return None

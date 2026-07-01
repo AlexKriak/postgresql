@@ -12,15 +12,15 @@ from console import console, render_error
 from db import get_conn
 from validators import NonEmptyValidator, YesNoValidator
 from commands import command, CATEGORY_ORDERS
-from src.auth import ROLE_SALES_MANAGER, auth_user
+from src.auth import ROLE_SALES_MANAGER, ROLE_INVENTORY_MANAGER, auth_user
 from src.users import get_user
-from src.helpers import get_warehouse_choices
+from src.helpers import get_warehouse_choices, yes_no_choice
 
 from typing import Optional
 
 from src.handlers.warehouses import Warehouse
-from src.handlers.order_items import _render_order_item_list, _get_order_items_by_order_id, add_order_item_interactive, _update_order_total, _get_order_items_by_order_id
-from src.helpers import yes_no_choice
+from src.handlers.order_items import _render_order_item_list, _get_order_items_by_order_id, add_order_item_interactive, _update_order_total
+from src.helpers import get_username_by_id
 
 
 @dataclass
@@ -43,7 +43,7 @@ def _get_warehouse_by_id(wid: int) -> Optional['Warehouse']:
 
 def _render_order(order: Order) -> None:
     warehouse = _get_warehouse_by_id(order.warehouses_id)
-    wh_display: str = f"{warehouse.city} ({warehouse.label or 'без метки'})" if warehouse else f"Склад ID {order.warehouses_id}"
+    wh_display: str = f"{warehouse.city_name} ({warehouse.label or 'без метки'})" if warehouse else f"Склад ID {order.warehouses_id}"
     creator: str = get_username_by_id(order.created_by)
     processor: str = get_username_by_id(order.processed_by) if order.processed_by else "Не назначен"
 
@@ -80,7 +80,7 @@ def _render_order_list(orders: list[Order]) -> None:
 
     for o in orders:
         wh = _get_warehouse_by_id(o.warehouses_id)
-        wh_disp: str = f"{wh.city} ({wh.label or 'без метки'})" if wh else str(o.warehouses_id)
+        wh_disp: str = f"{wh.city_name} ({wh.label or 'без метки'})" if wh else str(o.warehouses_id)
 
         creator: str = get_username_by_id(o.created_by)
         processor: str = get_username_by_id(o.processed_by) if o.processed_by else "Не назначен"
@@ -111,7 +111,7 @@ def _can_modify_order(status: str) -> bool:
     return status == "unpublished"
 
 
-@command("list orders", "список всех заказов", CATEGORY_ORDERS, [ROLE_SALES_MANAGER])
+@command("list orders", "список всех заказов", CATEGORY_ORDERS, [ROLE_SALES_MANAGER, ROLE_INVENTORY_MANAGER])
 def list_orders() -> None:
     conn = get_conn()
     with conn.cursor(row_factory=class_row(Order)) as cur:
@@ -222,58 +222,48 @@ def mark_order_processing(_id: str) -> None:
     current_user_id = auth_user().id
     conn = get_conn()
     try:
-        with conn.cursor() as cur:
-            cur.execute("BEGIN;")
-            cur.execute(
-                "SELECT status, processed_by"
-                "FROM sales.orders"
-                "WHERE id = %s FOR UPDATE;", (oid,)
-            )
-            order_row = cur.fetchone()
+        with conn:
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT status, processed_by FROM sales.orders WHERE id = %s FOR UPDATE;",
+                        (oid,)
+                    )
+                    order_row = cur.fetchone()
 
-            if not order_row:
-                render_error(f"Заказ с ID {oid} не найден")
-                cur.execute("ROLLBACK;")
-                return
+                    if not order_row:
+                        render_error(f"Заказ с ID {oid} не найден")
+                        return
 
-            order_status, current_processed_by = order_row
+                    order_status, current_processed_by = order_row
 
-            if order_status != "new":
-                render_error(f"Нельзя взять в обработку заказ со статусом '{order_status}'.")
-                cur.execute("ROLLBACK;")
-                return
+                    if order_status != "new":
+                        render_error(f"Нельзя взять в обработку заказ со статусом '{order_status}'.")
+                        return
 
-            if current_processed_by is not None and current_processed_by != current_user_id:
-                 render_error(f"Нельзя взять в обработку заказ, уже взятый пользователем ID {current_processed_by}.")
-                 cur.execute("ROLLBACK;")
-                 return
+                    if current_processed_by is not None and current_processed_by != current_user_id:
+                        render_error(f"Нельзя взять в обработку заказ, уже взятый пользователем ID {current_processed_by}.")
+                        return
 
-            console.print(f"Проверка заказа #{oid} (статус: {order_status})")
+                    console.print(f"Проверка заказа #{oid} (статус: {order_status})")
+                    answer: bool = yes_no_choice(f"Взять заказ #{oid} в обработку?")
+                    if not answer:
+                        console.print("[yellow]Действие отменено.[/yellow]")
+                        return
 
-            answer: bool = yes_no_choice(f"Взять заказ #{oid} в обработку?")
-            if not answer:
-                cur.execute("ROLLBACK;")
-                console.print("[yellow]Действие отменено.[/yellow]")
-                return
+                    cur.execute(
+                        "UPDATE sales.orders SET status = 'processing', processed_by = %s WHERE id = %s AND status = 'new'",
+                        (current_user_id, oid)
+                    )
 
-            cur.execute(
-                "UPDATE sales.orders"
-                "SET status = 'processing', processed_by = %s"
-                "WHERE id = %s AND status = 'new'", (current_user_id, oid)
-            )
+                    rows_affected = cur.rowcount
+                    if rows_affected == 0:
+                        render_error(f"Не удалось взять заказ #{oid} в обработку. Возможно, его уже кто-то взял.")
+                    else:
+                        console.print(f"[green]Заказ #{oid} взят в обработку.[/green]")
 
-            rows_affected = cur.rowcount
-            if rows_affected == 0:
-                render_error(f"Не удалось взять заказ #{oid} в обработку. Возможно, его уже кто-то взял.")
-                cur.execute("ROLLBACK;")
-            else:
-                cur.execute("COMMIT;")
-                console.print(f"[green]Заказ #{oid} взят в обработку.[/green]")
-
-        except Exception as e:
-            with conn.cursor() as cur:
-                cur.execute("ROLLBACK;")
-            render_error(f"Ошибка при взятии заказа в обработку: {e}")
+    except Exception as e:
+        render_error(f"Ошибка при взятии заказа в обработку: {e}")
 
 
 @command("show order", "информация о заказе", CATEGORY_ORDERS, [ROLE_SALES_MANAGER, ROLE_INVENTORY_MANAGER])

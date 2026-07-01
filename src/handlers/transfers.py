@@ -6,8 +6,9 @@ from psycopg.rows import class_row
 from rich.panel import Panel
 from rich.table import Table
 import psycopg.errors as pg_errors
-import datetime # Для работы с датами
+import datetime
 
+from psycopg.rows import Row
 from console import console, render_error
 from db import get_conn
 from validators import NonEmptyValidator, YesNoValidator
@@ -35,8 +36,8 @@ class Transfer:
     to_label: str
 
 
+# Отображает краткую информацию о перемещении
 def _render_transfer_summary(transfer: Transfer) -> None:
-    """Отображает краткую информацию о перемещении"""
     table = Table(show_header=False, box=None, padding=(0, 2))
     table.add_column("Поле", style="bold cyan", width=20)
     table.add_column("Значение", style="white")
@@ -61,8 +62,8 @@ def _render_transfer_summary(transfer: Transfer) -> None:
     console.print(panel)
 
 
+# Отображает подробную информацию о перемещении и его позициях
 def _render_transfer_detailed(transfer: Transfer, items: List) -> None:
-    """Отображает подробную информацию о перемещении и его позициях"""
     _render_transfer_summary(transfer)
 
     if not items:
@@ -90,8 +91,8 @@ def _get_transfer_by_id(tid: int) -> Optional[Transfer]:
         return cur.fetchone()
 
 
-def _get_planned_transfers(current_user_only: bool = False) -> List[Tuple[Transfer, List]]:
-    """Получает список планируемых перемещений (опционально только текущего пользователя)."""
+# Получает список планируемых перемещений
+def _get_planned_transfers(current_user_only: bool = False) -> List[Tuple[object, List]]:
     conn = get_conn()
     user_id_filter = ""
     user_params = ()
@@ -100,11 +101,7 @@ def _get_planned_transfers(current_user_only: bool = False) -> List[Tuple[Transf
         user_id_filter = " AND ti.requested_by = %s"
         user_params = (user_id,)
 
-    # Получаем все planned transfers и их items за один запрос
-    # Группируем результаты вручную
-    transfers_map = {}
-    with conn.cursor(row_factory=class_row(Transfer)) as cur_transfer: # Используем Transfer для получения основной инфы
-        # Сначала получим основные данные transfer
+    with conn.cursor(row_factory=Row) as cur_transfer:
         cur_transfer.execute(f"""
             SELECT t.id, t.from_warehouse_id, t.to_warehouse_id, t.status,
                    t.created_at, t.started_at, t.arriving_at, t.received_at,
@@ -119,16 +116,12 @@ def _get_planned_transfers(current_user_only: bool = False) -> List[Tuple[Transf
         transfer_rows = cur_transfer.fetchall()
 
     results = []
-    for transfer_row in transfer_rows:
-        transfer_obj = Transfer(
-            id=transfer_row.id, from_warehouse_id=transfer_row.from_warehouse_id, to_warehouse_id=transfer_row.to_warehouse_id,
-            status=transfer_row.status, created_at=transfer_row.created_at, started_at=transfer_row.started_at,
-            arriving_at=transfer_row.arriving_at, received_at=transfer_row.received_at,
-            from_city_name=transfer_row.from_city_name, from_label=transfer_row.from_label,
-            to_city_name=transfer_row.to_city_name, to_label=transfer_row.to_label
-        )
-        items = _get_transfer_items_by_transfer_id(transfer_obj.id)
-        results.append((transfer_obj, items))
+    for row in transfer_rows:
+        transfer_id = row[0]
+        transfer_obj = _get_transfer_by_id(transfer_id)
+        if transfer_obj:
+             items = _get_transfer_items_by_transfer_id(transfer_obj.id)
+             results.append((transfer_obj, items))
 
     return results
 
@@ -177,10 +170,9 @@ def show_transfer(_id: str) -> None:
     items = _get_transfer_items_by_transfer_id(tid)
     _render_transfer_detailed(transfer, items)
 
-
+# Меняет статус перемещения с planned на shipping
 @command("start shipping", "начать отгрузку перемещения", CATEGORY_INVENTORY_TRANSFERS, [ROLE_INVENTORY_MANAGER])
 def start_shipping(_id: str) -> None:
-    """Меняет статус перемещения с planned на shipping"""
     try:
         tid: int = int(_id)
     except ValueError:
@@ -190,53 +182,42 @@ def start_shipping(_id: str) -> None:
     current_user_id = auth_user().id
     conn = get_conn()
     try:
-        with conn.cursor() as cur:
-            cur.execute("BEGIN;")
+        with conn:
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT status, from_warehouse_id, to_warehouse_id"
+                        "FROM inventory.transfers"
+                        "WHERE id = %s FOR UPDATE;",
+                        (tid,)
+                    )
+                    transfer_row = cur.fetchone()
 
-            # Читаем перемещение С БЛОКИРОВКОЙ строки
-            cur.execute("""
-                SELECT status, from_warehouse_id, to_warehouse_id
-                FROM inventory.transfers
-                WHERE id = %s FOR UPDATE;
-            """, (tid,))
-            transfer_row = cur.fetchone()
+                    if not transfer_row:
+                        render_error(f"Перемещение с ID {tid} не найдено")
+                        return
 
-            if not transfer_row:
-                render_error(f"Перемещение с ID {tid} не найдено")
-                cur.execute("ROLLBACK;")
-                return
+                    current_status, from_wid, to_wid = transfer_row
 
-            current_status, from_wid, to_wid = transfer_row
+                    if current_status != "planned":
+                        render_error(f"Невозможно начать отгрузку перемещения со статусом '{current_status}'. Ожидается 'planned'.")
+                        return
 
-            if current_status != "planned":
-                render_error(f"Невозможно начать отгрузку перемещения со статусом '{current_status}'. Ожидается 'planned'.")
-                cur.execute("ROLLBACK;")
-                return
+                    console.print(f"Перемещение #{tid} (ID: {from_wid} -> {to_wid}, статус: {current_status})")
+                    answer: bool = yes_no_choice(f"Начать отгрузку перемещения #{tid}?")
+                    if not answer:
+                        console.print("[yellow]Действие отменено.[/yellow]")
+                        return
 
-            console.print(f"Перемещение #{tid} (ID: {from_wid} -> {to_wid}, статус: {current_status})")
-            answer: bool = yes_no_choice(f"Начать отгрузку перемещения #{tid}?")
-            if not answer:
-                cur.execute("ROLLBACK;") # Откатываем транзакцию, если пользователь отказался
-                console.print("[yellow]Действие отменено.[/yellow]")
-                return
+                    now = datetime.datetime.now()
+                    cur.execute(
+                        "UPDATE inventory.transfers"
+                        "SET status = 'shipping', started_at = %s"
+                        "WHERE id = %s AND status = 'planned'",
+                        (now, tid)
+                    )
 
-            now = datetime.datetime.now()
-            cur.execute("""
-                UPDATE inventory.transfers
-                SET status = 'shipping', started_at = %s
-                WHERE id = %s AND status = 'planned'
-            """, (now, tid))
-
-            rows_affected = cur.rowcount
-            if rows_affected == 0:
-                # Это означает, что между SELECT FOR UPDATE и UPDATE статус изменился
-                render_error(f"Не удалось начать отгрузку перемещения #{tid}. Его статус мог измениться.")
-                cur.execute("ROLLBACK;")
-            else:
-                cur.execute("COMMIT;")
-                console.print(f"[green]Отгрузка перемещения #{tid} начата (статус: shipping).[/green]")
+                    console.print(f"[green]Отгрузка перемещения #{tid} начата (статус: shipping).[/green]")
 
     except Exception as e:
-        with conn.cursor() as cur:
-            cur.execute("ROLLBACK;")
         render_error(f"Ошибка при начале отгрузки перемещения: {e}")
