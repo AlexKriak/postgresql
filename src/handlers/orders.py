@@ -57,6 +57,7 @@ def _render_order(order: Order) -> None:
     table.add_row("Склад", wh_display)
     table.add_row("Создано", creator)
     table.add_row("Обрабатывает", processor)
+    table.add_column("Товаров (уникальных)", str(order.unique_items_count))
 
     panel: Panel = Panel(
         table,

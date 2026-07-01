@@ -79,69 +79,52 @@ def get_order_item_statuses(oid: int) -> List[OrderItemWithStatus]:
     return final_items
 
 # Для вычисления статуса по позициям
-def _calculate_item_status(item: OrderItemWithStatus, order_status: str, processed_by: Optional[int], order_warehouse_id: int, conn) -> str:
-    item_id = item.id
+def _calculate_item_status(item: OrderItemWithStatus, order_status: str, processed_by: Optional[int], conn) -> str:
+    order_id = item.orders_id
     product_id = item.product_id
-    item_quantity = item.quantity
 
     if order_status == 'new' and processed_by is None:
         return 'ожидает обработки'
-
-    elif order_status in ('processing', 'pending'):
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT SUM(quantity) FROM inventory.reserves"
-                "WHERE order_id = %s AND product_id = %s AND warehouse_id = %s", (item.orders_id, product_id, order_warehouse_id)
-            )
-            reserved_qty_result = cur.fetchone()
-            reserved_qty = reserved_qty_result[0] if reserved_qty_result[0] is not None else 0
-
-        if reserved_qty >= item_quantity:
-            return 'в резерве'
-        else:
-            # Проверяем, есть ли товар в пути
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT 1 FROM inventory.transfer_items ti"
-                    "JOIN inventory.transfers t ON ti.transfer_id = t.id"
-                    "WHERE ti.product_id = %s"
-                    "AND t.to_warehouse_id = %s"
-                    "AND t.status IN ('planned', 'shipping', 'in_transit')"
-                    "AND ti.reserve_id IN ("
-                    "SELECT r.id FROM inventory.reserves r"
-                    "WHERE r.order_id = %s AND r.product_id = %s"
-                    ")", (product_id, order_warehouse_id, item.orders_id, product_id)
-                )
-                exists_pending_transfer = cur.fetchone()
-
-            if exists_pending_transfer:
-                with conn.cursor() as cur_time:
-                    cur_time.execute(
-                        "SELECT MIN(t.arriving_at)"
-                        "FROM inventory.transfer_items ti"
-                        "JOIN inventory.transfers t ON ti.transfer_id = t.id"
-                        "WHERE ti.product_id = %s"
-                        "AND t.to_warehouse_id = %s"
-                        "AND t.status IN ('planned', 'shipping', 'in_transit')"
-                        "AND ti.reserve_id IN ("
-                        "SELECT r.id FROM inventory.reserves r"
-                        "WHERE r.order_id = %s AND r.product_id = %s"
-                        ")", (product_id, order_warehouse_id, item.orders_id, product_id)
-                    )
-                    earliest_arrival = cur_time.fetchone()[0]
-
-                arrival_str = f", ожидается до {earliest_arrival.strftime('%Y-%m-%d %H:%M')}" if earliest_arrival else ""
-                return f'в пути (ожидается до {earliest_arrival}{arrival_str})' if earliest_arrival else 'в пути'
-            else:
-                return 'ожидает обработки'
-
     elif order_status == 'packing':
         return 'запланирована отгрузка'
-
     elif order_status == 'shipped':
         return 'отгружено'
 
-    return 'неизвестно'
+    # проверяем резерв
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT quantity FROM inventory.reserves
+            WHERE order_id = %s AND product_id = %s
+            LIMIT 1;
+        """, (order_id, product_id))
+        reserve_row = cur.fetchone()
+
+    if reserve_row:
+        reserved_qty = reserve_row[0]
+        if reserved_qty >= item.quantity:
+            return 'в резерве'
+
+    # проверяем перемещение
+    with conn.cursor as cur:
+        cur.execute("""
+            SELECT ti.quantity, t.status, w.city, t.arriving_at
+            FROM inventory.transfer_items ti
+            JOIN inventory.transfers t ON ti.transfer_id = t.id
+            JOIN catalog.warehouses w ON t.from_warehouse_id = w.id
+            WHERE ti.reserve_id = (
+                SELECT id FROM inventory.reserve 
+                WHERE order_id = %s AND product_id = %s
+            )
+            LIMIT 1
+        """, (order_id, product_id))
+        transfer_row = cur.fetchone()
+
+    if transfer_row:
+        _, t_status, from_city, arriving_at = transfer_row
+        arrival_str = f", из {from_city}"
+        if arriving_at:
+            arrival_str += f", ожидается до {arriving_at.strftime('%Y-%m-%d %H:%M')}"
+        return f'в пути{arrival_str}'
 
 
 @command("view warehouse stock", "просмотр остатков на складе", CATEGORY_INVENTORY_READ, [ROLE_INVENTORY_MANAGER, ROLE_WORKER])
