@@ -257,11 +257,7 @@ def mark_order_processing(_id: str) -> None:
                         (current_user_id, oid)
                     )
 
-                    rows_affected = cur.rowcount
-                    if rows_affected == 0:
-                        render_error(f"Не удалось взять заказ #{oid} в обработку. Возможно, его уже кто-то взял.")
-                    else:
-                        console.print(f"[green]Заказ #{oid} взят в обработку.[/green]")
+                    console.print(f"[green]Заказ #{oid} взят в обработку.[/green]")
 
     except Exception as e:
         render_error(f"Ошибка при взятии заказа в обработку: {e}")

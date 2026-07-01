@@ -124,7 +124,7 @@ def _get_or_create_planned_transfer(from_warehouse_id: int, to_warehouse_id: int
                     JOIN catalog.warehouses fw ON t.from_warehouse_id = fw.id
                     JOIN catalog.warehouses tw ON t.to_warehouse_id = tw.id
                     WHERE t.from_warehouse_id = %s AND t.to_warehouse_id = %s AND t.status = 'planned'
-                    FOR UPDATE;
+                    FOR UPDATE SKIP LOCKED;
                 """, (from_warehouse_id, to_warehouse_id))
                 existing_transfer = cur.fetchone()
 
@@ -136,14 +136,11 @@ def _get_or_create_planned_transfer(from_warehouse_id: int, to_warehouse_id: int
                     cur.execute("""
                         INSERT INTO inventory.transfers (from_warehouse_id, to_warehouse_id, status)
                         VALUES (%s, %s, 'planned')
-                        ON CONFLICT (from_warehouse_id, to_warehouse_id) WHERE status = 'planned'
-                        DO UPDATE SET status = EXCLUDED.status
-                        RETURNING t.id;
+                        RETURNING id;
                     """, (from_warehouse_id, to_warehouse_id))
                     inserted_id_row = cur.fetchone()
                     if inserted_id_row:
                          inserted_id = inserted_id_row[0]
-                         # Получаем полную информацию о вставленном/найденном трансфере
                          cur.execute("""
                             SELECT t.id, t.from_warehouse_id, t.to_warehouse_id, t.status,
                                    t.created_at, t.started_at, t.arriving_at, t.received_at,
@@ -155,8 +152,11 @@ def _get_or_create_planned_transfer(from_warehouse_id: int, to_warehouse_id: int
                             WHERE t.id = %s;
                         """, (inserted_id,))
                          return cur.fetchone()
+                    else:
+                         render_error("Не удалось получить ID вставленного перемещения.")
+                         return None
+
                 except Exception as e:
-                    from console import render_error
                     render_error(f"Ошибка при создании перемещения: {e}")
                     return None
 
