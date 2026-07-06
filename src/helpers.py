@@ -113,7 +113,7 @@ def _get_transfer_by_id(tid: int) -> Optional[Transfer]:
 def _get_or_create_planned_transfer(from_warehouse_id: int, to_warehouse_id: int) -> Optional[Transfer]:
     conn = get_conn()
     with conn:
-        with conn.transaction():
+        with conn.transaction(isolation_level="SERIALIZABLE"):
             with conn.cursor(row_factory=class_row(Transfer)) as cur:
                 cur.execute("""
                     SELECT t.id, t.from_warehouse_id, t.to_warehouse_id, t.status,
@@ -124,40 +124,109 @@ def _get_or_create_planned_transfer(from_warehouse_id: int, to_warehouse_id: int
                     JOIN catalog.warehouses fw ON t.from_warehouse_id = fw.id
                     JOIN catalog.warehouses tw ON t.to_warehouse_id = tw.id
                     WHERE t.from_warehouse_id = %s AND t.to_warehouse_id = %s AND t.status = 'planned'
-                    FOR UPDATE;
                 """, (from_warehouse_id, to_warehouse_id))
                 existing_transfer = cur.fetchone()
 
                 if existing_transfer:
                     return existing_transfer
 
-                # Если не нашли, пытаемся создать новый
-                try:
-                    cur.execute("""
-                        INSERT INTO inventory.transfers (from_warehouse_id, to_warehouse_id, status)
-                        VALUES (%s, %s, 'planned')
-                        ON CONFLICT (from_warehouse_id, to_warehouse_id) WHERE status = 'planned'
-                        DO UPDATE SET status = EXCLUDED.status
-                        RETURNING t.id;
-                    """, (from_warehouse_id, to_warehouse_id))
-                    inserted_id_row = cur.fetchone()
-                    if inserted_id_row:
-                         inserted_id = inserted_id_row[0]
-                         # Получаем полную информацию о вставленном/найденном трансфере
-                         cur.execute("""
-                            SELECT t.id, t.from_warehouse_id, t.to_warehouse_id, t.status,
-                                   t.created_at, t.started_at, t.arriving_at, t.received_at,
-                                   fw.city_name as from_city_name, fw.label as from_label,
-                                   tw.city_name as to_city_name, tw.label as to_label
-                            FROM inventory.transfers t
-                            JOIN catalog.warehouses fw ON t.from_warehouse_id = fw.id
-                            JOIN catalog.warehouses tw ON t.to_warehouse_id = tw.id
-                            WHERE t.id = %s;
-                        """, (inserted_id,))
-                         return cur.fetchone()
-                except Exception as e:
-                    from console import render_error
-                    render_error(f"Ошибка при создании перемещения: {e}")
+                cur.execute("""
+                    INSERT INTO inventory.transfers (from_warehouse_id, to_warehouse_id, status)
+                    VALUES (%s, %s, 'planned')
+                    RETURNING t.id;
+                """, (from_warehouse_id, to_warehouse_id))
+                inserted_id_row = cur.fetchone()
+
+                if inserted_id_row:
+                     inserted_id = inserted_id_row[0]
+                     cur.execute("""
+                        SELECT t.id, t.from_warehouse_id, t.to_warehouse_id, t.status,
+                               t.created_at, t.started_at, t.arriving_at, t.received_at,
+                               fw.city_name as from_city_name, fw.label as from_label,
+                               tw.city_name as to_city_name, tw.label as to_label
+                        FROM inventory.transfers t
+                        JOIN catalog.warehouses fw ON t.from_warehouse_id = fw.id
+                        JOIN catalog.warehouses tw ON t.to_warehouse_id = tw.id
+                        WHERE t.id = %s;
+                    """, (inserted_id,))
+                     return cur.fetchone()
+                else:
+                    render_error("Не удалось получить ID вставленного перемещения в SERIALIZABLE транзакции.")
                     return None
 
     return None
+
+
+# Получает список городов (id, name), из которых есть склады с товаром и маршруты
+def _get_available_departure_cities_with_stock_and_routes() -> List[Tuple[int, str]]:
+    conn = get_conn()
+    with conn.cursor(row_factory=Row) as cur:
+        cur.execute("""
+            SELECT DISTINCT c.id, c.name
+            FROM inventory.stock s
+            JOIN catalog.warehouses w ON s.warehouse_id = w.id
+            JOIN catalog.cities c ON w.city_id = c.id
+            JOIN inventory.routes r ON c.id = r.from_city_id
+            WHERE s.quantity > 0
+            ORDER BY c.name;
+        """)
+        return cur.fetchall()
+
+
+# Получает список складов (id, display) в заданном городе, участвующих в маршрутах отправителя
+def _get_available_departure_warehouses_by_city(city_id: int) -> List[Tuple[int, str]]:
+    conn = get_conn()
+    with conn.cursor(row_factory=Row) as cur:
+        cur.execute("""
+            SELECT w.id, w.city_name || ' (' || COALESCE(w.label, '') || ')' AS display
+            FROM catalog.warehouses w
+            JOIN inventory.routes r ON w.city_id = r.from_city_id
+            WHERE w.city_id = %s
+            ORDER BY w.city_name, w.label;
+        """, (city_id,))
+        return cur.fetchall()
+
+
+# Получает список городов (id, name), в которые есть маршрут из города отправления
+def _get_available_destination_cities_by_departure_city(departure_city_id: int) -> List[Tuple[int, str]]:
+    conn = get_conn()
+    with conn.cursor(row_factory=Row) as cur:
+        cur.execute("""
+             SELECT DISTINCT ct.id, ct.name
+             FROM inventory.routes r
+             JOIN catalog.cities ct ON r.to_city_id = ct.id
+             WHERE r.from_city_id = %s
+             ORDER BY ct.name;
+        """, (departure_city_id,))
+        return cur.fetchall()
+
+
+# Получает список складов (id, display) в заданном городе получателя
+def _get_available_destination_warehouses_by_city(city_id: int) -> List[Tuple[int, str]]:
+    conn = get_conn()
+    with conn.cursor(row_factory=Row) as cur:
+        cur.execute("""
+            SELECT w.id, w.city_name || ' (' || COALESCE(w.label, '') || ')' AS display
+            FROM catalog.warehouses w
+            JOIN inventory.routes r ON w.city_id = r.to_city_id
+            WHERE w.city_id = %s
+            ORDER BY w.city_name, w.label;
+        """, (city_id,))
+        return cur.fetchall()
+
+
+# Получает список перемещений (id, from_warehouse_id, to_warehouse_id, from_city_name, to_city_name)
+def _get_user_planned_transfers_with_routes(user_id: int) -> List[Tuple[int, int, int, str, str]]:
+    conn = get_conn()
+    with conn.cursor(row_factory=Row) as cur:
+        cur.execute("""
+            SELECT DISTINCT t.id, t.from_warehouse_id, t.to_warehouse_id,
+                   fw.city_name as from_city_name, tw.city_name as to_city_name
+            FROM inventory.transfers t
+            JOIN inventory.transfer_items ti ON t.id = ti.transfer_id
+            JOIN catalog.warehouses fw ON t.from_warehouse_id = fw.id
+            JOIN catalog.warehouses tw ON t.to_warehouse_id = tw.id
+            JOIN inventory.routes r ON fw.city_id = r.from_city_id AND tw.city_id = r.to_city_id
+            WHERE t.status = 'planned' AND ti.requested_by = %s
+        """, (user_id,))
+        return cur.fetchall()

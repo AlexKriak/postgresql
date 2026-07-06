@@ -39,8 +39,6 @@ def upgrade() -> None:
     op.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA sales GRANT ALL PRIVILEGES ON SEQUENCES TO sales_manager;")
 
     op.execute("GRANT USAGE ON SCHEMA catalog TO sales_manager;")
-    op.execute("GRANT USAGE ON SCHEMA auth TO sales_manager;")
-    op.execute("GRANT USAGE ON SCHEMA auth TO catalog_manager;")
 
 
 def downgrade() -> None:
