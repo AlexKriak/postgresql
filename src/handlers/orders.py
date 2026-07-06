@@ -438,3 +438,152 @@ def publish_order(_id: str) -> None:
     with get_conn().cursor() as cur:
         cur.execute("UPDATE sales.orders SET status = 'new' WHERE id = %s", (oid,))
     console.print(f"[green]Заказ #{oid} опубликован[/green]")
+
+
+@command("process order", "обработка заказа (inventory_manager)", CATEGORY_INVENTORY_READ, [ROLE_INVENTORY_MANAGER])
+def process_order(_id: str) -> None:
+    try:
+        oid = int(_id)
+    except ValueError:
+        render_error("ID заказа должен быть числом.")
+        return
+
+    conn = get_conn()
+    with conn.cursor(row_factory=Row) as cur:
+        cur.execute("SELECT status, warehouses_id FROM sales.orders WHERE id = %s", (oid,))
+        order_row = cur.fetchone()
+        if not order_row:
+            render_error(f"Заказ #{oid} не найден.")
+            return
+        order_status, target_warehouse_id = order_row
+        if order_status not in ['processing', 'pending']:
+            render_error(f"Заказ #{oid} в статусе '{order_status}', обработка невозможна.")
+            return
+
+    console.print(f"Обработка заказа #{oid} (статус: {order_status}, целевой склад: {target_warehouse_id}).")
+
+    order_items = _get_order_items_by_order_id(oid)
+    if not order_items:
+        console.print(f"[yellow]В заказе #{oid} нет позиций.[/yellow]")
+        return
+
+    for item in order_items:
+        item_pid = item.product_id
+        item_qty_needed = item.quantity
+        item_name = item.product_name
+        item_sku = item.product_sku
+
+        console.print(f"\n--- Обработка позиции: {item_name} (SKU: {item_sku}), количество: {item_qty_needed} ---")
+
+        with conn.cursor(row_factory=Row) as cur_stock:
+            cur_stock.execute("SELECT quantity FROM inventory.stock WHERE warehouse_id = %s AND product_id = %s", (target_warehouse_id, item_pid))
+            stock_row = cur_stock.fetchone()
+            available_qty_on_target = stock_row[0] if stock_row else 0
+
+        console.print(f"Доступно на целевом складе #{target_warehouse_id}: {available_qty_on_target}")
+
+        action_choices = []
+        if available_qty_on_target >= item_qty_needed:
+            action_choices.append(("reserve", "Добавить в резерв с текущего склада"))
+        action_choices.append(("search", "Искать на других складах"))
+        action_choices.append(("skip", "Пропустить (обработать позже)"))
+
+        selected_action = choice(
+            message="Выберите действие: ",
+            options=action_choices,
+            default=action_choices[0][0] if action_choices else "skip"
+        )
+
+        if selected_action == "reserve":
+            source_warehouse_id = target_warehouse_id
+            try:
+                with conn:
+                    with conn.transaction():
+                        with conn.cursor() as cur_reserve:
+                            cur_reserve.execute("""
+                                INSERT INTO inventory.reserves (order_id, product_id, quantity, warehouse_id, status)
+                                VALUES (%s, %s, %s, %s, 'reserved')
+                                RETURNING id;
+                            """, (oid, item_pid, item_qty_needed, source_warehouse_id))
+                            reserve_id = cur_reserve.fetchone()[0]
+                            console.print(f"[green]Создан резерв #{reserve_id} для {item_qty_needed} x {item_name} на складе #{source_warehouse_id}.[/green]")
+            except Exception as e:
+                render_error(f"Ошибка при создании резерва: {e}")
+
+        elif selected_action == "search":
+            with conn.cursor(row_factory=Row) as cur_sources:
+                cur_sources.execute("""
+                    SELECT s.warehouse_id, w.city_name, w.label, s.quantity
+                    FROM inventory.stock s
+                    JOIN catalog.warehouses w ON s.warehouse_id = w.id
+                    WHERE s.product_id = %s AND s.quantity >= %s AND s.warehouse_id != %s
+                    ORDER BY s.quantity DESC;
+                """, (item_pid, item_qty_needed, target_warehouse_id))
+                source_warehouses = cur_sources.fetchall()
+
+            if not source_warehouses:
+                console.print(f"[yellow]Нет доступных складов с {item_qty_needed} x {item_name} для перемещения на склад #{target_warehouse_id}.[/yellow]")
+                continue
+
+            source_choices = [(str(sw[0]), f"{sw[1]} ({sw[2] or 'без метки'}), в наличии: {sw[3]}") for sw in source_warehouses]
+            source_choices.append(("back", "Вернуться к выбору действия"))
+
+            selected_source = choice(
+                message="Выберите склад отправления: ",
+                options=source_choices,
+                default=source_choices[0][0] if source_choices else "back"
+            )
+
+            if selected_source == "back":
+                continue
+
+            try:
+                source_wid = int(selected_source)
+                from src.helpers import _get_or_create_planned_transfer
+                transfer = _get_or_create_planned_transfer(source_wid, target_warehouse_id)
+                if not transfer:
+                    render_error("Не удалось получить или создать перемещение.")
+                    continue
+                tid = transfer.id
+
+                with conn:
+                    with conn.transaction():
+                        with conn.cursor() as cur_add_item:
+                            cur_add_item.execute("SELECT 1 FROM inventory.transfers WHERE id = %s FOR UPDATE;", (tid,))
+                            cur_add_item.execute("SELECT 1 FROM inventory.transfer_items WHERE transfer_id = %s FOR UPDATE;", (tid,))
+                            cur_add_item.execute("SELECT 1 FROM inventory.stock WHERE warehouse_id = %s AND product_id = %s FOR UPDATE;", (source_wid, item_pid))
+
+                            cur_add_item.execute("SELECT quantity FROM inventory.stock WHERE warehouse_id = %s AND product_id = %s;", (source_wid, item_pid))
+                            stock_row = cur_add_item.fetchone()
+                            if not stock_row or stock_row[0] < item_qty_needed:
+                                render_error(f"Недостаточно товара '{item_name}' на складе отправления #{source_wid}.")
+                                continue
+
+                            cur_add_item.execute("""
+                                INSERT INTO inventory.reserves (order_id, product_id, quantity, warehouse_id, status)
+                                VALUES (%s, %s, %s, %s, 'pending_transfer')
+                                RETURNING id;
+                            """, (oid, item_pid, item_qty_needed, target_warehouse_id))
+                            reserve_id_for_transfer = cur_add_item.fetchone()[0]
+
+                            cur_add_item.execute("""
+                                INSERT INTO inventory.transfer_items (transfer_id, product_id, quantity, requested_by, status, reserve_id)
+                                VALUES (%s, %s, %s, %s, 'planned', %s);
+                            """, (tid, item_pid, item_qty_needed, auth_user().id, reserve_id_for_transfer))
+
+                            cur_add_item.execute("""
+                                UPDATE inventory.stock SET quantity = quantity - %s WHERE warehouse_id = %s AND product_id = %s;
+                            """, (item_qty_needed, source_wid, item_pid))
+
+                            console.print(f"[green]Создан резерв #{reserve_id_for_transfer} и добавлена позиция в трансфер #{tid} для {item_qty_needed} x {item_name}.[/green]")
+
+            except Exception as e:
+                render_error(f"Ошибка при создании перемещения: {e}")
+
+        elif selected_action == "skip":
+            console.print(f"[yellow]Позиция {item_name} пропущена.[/yellow]")
+            continue
+
+    console.print(f"\n[green]Обработка заказа #{oid} завершена (частично или полностью).[/green]")
+
+
