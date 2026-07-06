@@ -13,7 +13,9 @@ from db import get_conn
 from validators import NonEmptyValidator, YesNoValidator
 from commands import command, CATEGORY_INVENTORY_TRANSFER_ITEMS
 from src.auth import ROLE_INVENTORY_MANAGER
-from src.helpers import get_warehouse_choices, get_username_by_id, yes_no_choice, Transfer, _get_transfer_by_id, _get_or_create_planned_transfer
+from src.helpers import get_warehouse_choices, get_username_by_id, yes_no_choice, Transfer, _get_transfer_by_id,
+_get_or_create_planned_transfer, _get_available_departure_cities_with_stock_and_routes, _get_available_departure_warehouses_by_city,
+_get_available_destination_cities_by_departure_city, _get_available_destination_warehouses_by_city, _get_user_planned_transfers_with_routes
 from typing import Optional, List
 import datetime
 
@@ -111,19 +113,9 @@ def add_transfer_item() -> None:
     current_user_id = auth_user().id
 
     # Выбор города отправления
-    with conn.cursor(row_factory=Row) as cur:
-        cur.execute("""
-            SELECT DISTINCT w.city_id, c.name
-            FROM catalog.warehouses w
-            JOIN catalog.cities c ON w.city_id = c.id
-            JOIN inventory.stock s ON w.id = s.warehouse_id
-            WHERE s.quantity > 0
-            ORDER BY c.name;
-        """)
-        from_cities_raw = cur.fetchall()
-
+    from_cities_raw = _get_available_departure_cities_with_stock_and_routes()
     if not from_cities_raw:
-        console.print("[yellow]Нет городов с доступными складами отправления и товаром на них.[/yellow]")
+        console.print("[yellow]Нет городов с доступными складами отправления (имеющими товар и маршрут).[/yellow]")
         return
 
     from_city_choices = [(str(city_id), name) for city_id, name in from_cities_raw]
@@ -139,11 +131,11 @@ def add_transfer_item() -> None:
         return
 
     # Выбор склада в городе отправления
-    from_warehouse_choices_filtered = [(wid, disp) for wid, disp in get_warehouse_choices() if get_warehouse_city_id(wid) == from_city_id]
-    if not from_warehouse_choices_filtered:
-         console.print(f"[yellow]Нет доступных складов в городе отправления ID {from_city_id}.[/yellow]")
+    from_warehouse_choices_filtered_raw = _get_available_departure_warehouses_by_city(from_city_id)
+    if not from_warehouse_choices_filtered_raw:
+         console.print(f"[yellow]Нет доступных складов в городе отправления ID {from_city_id} (участвующих в маршрутах).[/yellow]")
          return
-    from_warehouse_choices_select = [(str(wid), disp) for wid, disp in from_warehouse_choices_filtered]
+    from_warehouse_choices_select = [(str(wid), disp) for wid, disp in from_warehouse_choices_filtered_raw]
     selected_from_warehouse_id_str: str = choice(
         message="Выберите склад отправления: ",
         options=from_warehouse_choices_select,
@@ -156,16 +148,14 @@ def add_transfer_item() -> None:
         return
 
     # Выбор города получения
-    with conn.cursor(row_factory=Row) as cur_routes:
-         cur_routes.execute("SELECT DISTINCT to_city_id FROM inventory.routes WHERE from_city_id = %s", (from_city_id,))
-         to_city_ids_raw = cur_routes.fetchall()
+    to_city_ids_raw = _get_available_destination_cities_by_departure_city(from_city_id)
     to_city_ids = [row[0] for row in to_city_ids_raw]
+    to_city_names = {row[0]: row[1] for row in to_city_ids_raw}
 
     if not to_city_ids:
         console.print(f"[yellow]Нет доступных маршрутов из города ID {from_city_id}.[/yellow]")
         return
 
-    to_city_names = {cid: name for cid, name in get_city_id_name_choices() if cid in to_city_ids}
     to_city_choices = [(str(cid), name) for cid, name in to_city_names.items()]
     selected_to_city_id_str: str = choice(
         message="Выберите город получения (по доступным маршрутам): ",
@@ -179,11 +169,11 @@ def add_transfer_item() -> None:
         return
 
     # Выбор склада в городе получения
-    to_warehouse_choices_filtered = [(wid, disp) for wid, disp in get_warehouse_choices() if get_warehouse_city_id(wid) == to_city_id]
-    if not to_warehouse_choices_filtered:
-         console.print(f"[yellow]Нет доступных складов в городе получения ID {to_city_id}.[/yellow]")
+    to_warehouse_choices_filtered_raw = _get_available_destination_warehouses_by_city(to_city_id)
+    if not to_warehouse_choices_filtered_raw:
+         console.print(f"[yellow]Нет доступных складов в городе получения ID {to_city_id} (участвующих в маршрутах).[/yellow]")
          return
-    to_warehouse_choices_select = [(str(wid), disp) for wid, disp in to_warehouse_choices_filtered]
+    to_warehouse_choices_select = [(str(wid), disp) for wid, disp in to_warehouse_choices_filtered_raw]
     selected_to_warehouse_id_str: str = choice(
         message="Выберите склад получения: ",
         options=to_warehouse_choices_select,
@@ -196,7 +186,6 @@ def add_transfer_item() -> None:
         return
 
     while True:
-        # Получить товары на складе отправления
         with conn.cursor(row_factory=Row) as cur_stock:
             cur_stock.execute(
                 "SELECT s.product_id, p.name, p.sku, s.quantity"
@@ -250,14 +239,17 @@ def add_transfer_item() -> None:
             with conn:
                 with conn.transaction():
                     with conn.cursor(row_factory=Row) as cur_atomic:
-                        # Получить или создать planned transfer
                         transfer = _get_or_create_planned_transfer(from_warehouse_id, to_warehouse_id)
                         if not transfer:
                             render_error("Не удалось получить или создать перемещение.")
                             return
                         tid = transfer.id
 
-                        # Проверить и обновить/создать transfer_item
+                        cur_atomic.execute("SELECT status FROM inventory.transfers WHERE id = %s FOR UPDATE;", (tid,))
+                        transfer_row = cur_atomic.fetchone()
+                        if not transfer_row or transfer_row[0] != 'planned':
+                            raise ValueError(f"Перемещение #{tid} не найдено или не в статусе planned.")
+
                         cur_atomic.execute("SELECT 1 FROM inventory.transfer_items WHERE transfer_id = %s FOR UPDATE;", (tid,))
                         cur_atomic.execute(
                             "SELECT id, quantity FROM inventory.transfer_items"
@@ -282,7 +274,6 @@ def add_transfer_item() -> None:
                             """, (tid, selected_product_id, qty_to_add, current_user_id))
                             console.print(f"[green]Добавлено: {qty_to_add} x {prod_name} (SKU: {prod_sku}) в перемещение #{tid}[/green]")
 
-                        # Вычесть со склада
                         cur_atomic.execute(
                             "SELECT quantity FROM inventory.stock WHERE warehouse_id = %s AND product_id = %s FOR UPDATE;",
                             (from_warehouse_id, selected_product_id)
@@ -297,6 +288,8 @@ def add_transfer_item() -> None:
                         )
                         console.print(f"[blue]Вычтено {qty_to_add} x {prod_name} (SKU: {prod_sku}) со склада #{from_warehouse_id}.[/blue]")
 
+        except psycopg.errors.SerializationFailure:
+            render_error("Не удалось добавить позицию: обнаружена конкуренция данных. Пожалуйста, повторите выбор товара и количества.")
         except ValueError as ve:
             render_error(str(ve))
         except Exception as e:
@@ -313,19 +306,9 @@ def remove_transfer_item() -> None:
     current_user_id = auth_user().id
     conn = get_conn()
 
-    with conn.cursor(row_factory=Row) as cur:
-        cur.execute("""
-            SELECT DISTINCT t.id, t.from_warehouse_id, t.to_warehouse_id, fw.city_name as from_city_name, tw.city_name as to_city_name
-            FROM inventory.transfers t
-            JOIN inventory.transfer_items ti ON t.id = ti.transfer_id
-            JOIN catalog.warehouses fw ON t.from_warehouse_id = fw.id
-            JOIN catalog.warehouses tw ON t.to_warehouse_id = tw.id
-            WHERE t.status = 'planned' AND ti.requested_by = %s
-        """, (current_user_id,))
-        relevant_transfers_raw = cur.fetchall()
-
+    relevant_transfers_raw = _get_user_planned_transfers_with_routes(current_user_id)
     if not relevant_transfers_raw:
-        console.print("[yellow]У вас нет позиций в запланированных перемещениях.[/yellow]")
+        console.print("[yellow]У вас нет позиций в запланированных перемещениях (с действительными маршрутами).[/yellow]")
         return
 
     transfer_choices = [(str(row[0]), f"#{row[0]}: {row[3]} ({row[1]}) -> {row[4]} ({row[2]})") for row in relevant_transfers_raw]
@@ -395,10 +378,9 @@ def remove_transfer_item() -> None:
             with conn:
                 with conn.transaction():
                     with conn.cursor() as cur_atomic:
-                        cur_atomic.execute("""
-                            SELECT id FROM inventory.transfers WHERE id = %s AND status = 'planned' FOR UPDATE;
-                        """, (tid,))
-                        if not cur_atomic.fetchone():
+                        cur_atomic.execute("SELECT status FROM inventory.transfers WHERE id = %s FOR UPDATE;", (tid,))
+                        transfer_row = cur_atomic.fetchone()
+                        if not transfer_row or transfer_row[0] != 'planned':
                             raise ValueError(f"Перемещение #{tid} не найдено или не в статусе planned.")
 
                         cur_atomic.execute("SELECT 1 FROM inventory.transfer_items WHERE transfer_id = %s FOR UPDATE;", (tid,))
@@ -434,7 +416,6 @@ def remove_transfer_item() -> None:
                             "SELECT quantity FROM inventory.stock WHERE warehouse_id = %s AND product_id = %s FOR UPDATE;",
                             (from_warehouse_id, item_to_remove.product_id)
                         )
-
                         cur_atomic.execute(
                             "UPDATE inventory.stock SET quantity = quantity + %s WHERE warehouse_id = %s AND product_id = %s;",
                             (qty_to_remove, from_warehouse_id, item_to_remove.product_id)
@@ -457,10 +438,3 @@ def remove_transfer_item() -> None:
              console.print(f"[green]Изменения в перемещении #{tid} сохранены.[/green]")
              return
 
-
-def get_warehouse_city_id(wid: int) -> Optional[int]:
-    conn = get_conn()
-    with conn.cursor() as cur:
-        cur.execute("SELECT city_id FROM catalog.warehouses WHERE id = %s", (wid,))
-        res = cur.fetchone()
-        return res[0] if res else None
