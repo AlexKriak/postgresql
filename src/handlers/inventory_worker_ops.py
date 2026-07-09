@@ -136,6 +136,7 @@ def list_transfers_shipping() -> None:
         console.print(table)
         console.print("---")
 
+
 @command("ship transfer", "отгрузка трансфера (изменение статуса позиций и трансфера)", CATEGORY_INVENTORY_READ, [ROLE_WORKER])
 def ship_transfer(_id: str) -> None:
     try:
@@ -150,77 +151,92 @@ def ship_transfer(_id: str) -> None:
         return
 
     conn = get_conn()
-    try:
-        with conn:
-            with conn.transaction():
-                with conn.cursor(row_factory=Row) as cur:
-                    cur.execute("""
-                        SELECT id, status, from_warehouse_id
-                        FROM inventory.transfers
-                        WHERE id = %s AND status = 'shipping' AND from_warehouse_id = %s
-                        FOR UPDATE; -- Блокируем строку
-                    """, (tid, worker_warehouse_id))
-                    transfer_row = cur.fetchone()
-                    if not transfer_row:
-                        render_error(f"Трансфер #{tid} не найден, не в статусе 'shipping' или не с вашего склада.")
-                        return
-
-                    items = _get_transfer_items_by_transfer_id_and_status(tid, 'planned')
-                    if not items:
-                         console.print(f"[green]Все позиции в трансфере #{tid} уже отгружены.[/green]")
-                         cur.execute("UPDATE inventory.transfers SET status = 'in_transit', started_at = COALESCE(started_at, NOW()) WHERE id = %s;", (tid,))
-                         console.print(f"[green]Статус трансфера #{tid} изменен на 'in_transit'.[/green]")
-                         return
-
-                    console.print(f"Обработка отгрузки для трансфера #{tid}. Найдено {len(items)} позиций со статусом 'planned'.")
-
-                    confirm_ship = yes_no_choice(f"Отгрузить все {len(items)} позиции из трансфера #{tid}?")
-                    if not confirm_ship:
-                        console.print("[yellow]Отгрузка отменена.[/yellow]")
-                        return
-
-                    item_ids = [item[0] for item in items]
-                    placeholders = ','.join(['%s'] * len(item_ids))
-                    cur.execute(f"""
-                        UPDATE inventory.transfer_items
-                        SET status = 'shipped', shipped_at = NOW()
-                        WHERE id IN ({placeholders}) AND status = 'planned';
-                    """, item_ids)
-
-                    rows_affected = cur.rowcount
-                    if rows_affected != len(item_ids):
-                        render_error(f"Не все позиции удалось отгрузить. Возможно, другой работник уже обработал часть из них.")
-                        return
-
-                    cur.execute("SELECT COUNT(*) FROM inventory.transfer_items WHERE transfer_id = %s AND status IN ('shipped', 'received');", (tid,))
-                    processed_items_count = cur.fetchone()[0]
-                    total_items_count = len(_get_transfer_items_by_transfer_id(tid))
-
-                    if processed_items_count == total_items_count:
+    while True:
+        try:
+            with conn:
+                with conn.transaction():
+                    with conn.cursor(row_factory=Row) as cur:
                         cur.execute("""
-                            SELECT r.duration
-                            FROM inventory.transfers t
-                            JOIN catalog.warehouses fw ON t.from_warehouse_id = fw.id
-                            JOIN catalog.warehouses tw ON t.to_warehouse_id = tw.id
-                            JOIN inventory.routes r ON fw.city_id = r.from_city_id AND tw.city_id = r.to_city_id
-                            WHERE t.id = %s;
+                            SELECT id, status, from_warehouse_id
+                            FROM inventory.transfers
+                            WHERE id = %s AND status = 'shipping' AND from_warehouse_id = %s
+                            FOR UPDATE; -- Блокируем строку
+                        """, (tid, worker_warehouse_id))
+                        transfer_row = cur.fetchone()
+                        if not transfer_row:
+                            render_error(f"Трансфер #{tid} не найден, не в статусе 'shipping' или не с вашего склада.")
+                            return
+
+                        cur.execute("""
+                            SELECT id, transfer_id, product_id, quantity, requested_by, reserve_id, status, created_at, shipped_at, received_at,
+                                   p.sku, p.name
+                            FROM inventory.transfer_items ti
+                            JOIN catalog.products p ON ti.product_id = p.id
+                            WHERE transfer_id = %s AND status = 'planned'
+                            ORDER BY id
+                            LIMIT 1
+                            FOR UPDATE;
                         """, (tid,))
-                        route_duration_row = cur.fetchone()
-                        duration = route_duration_row[0] if route_duration_row else datetime.timedelta(hours=24)
+                        item_row = cur.fetchone()
+                        if not item_row:
+                             console.print(f"[green]Все позиции в трансфере #{tid} уже отгружены.[/green]")
+                             cur.execute("SELECT COUNT(*) FROM inventory.transfer_items WHERE transfer_id = %s AND status IN ('shipped', 'received');", (tid,))
+                             processed_items_count = cur.fetchone()[0]
+                             total_items_count = len(_get_transfer_items_by_transfer_id(tid))
 
-                        arriving_at = datetime.datetime.now() + duration
+                             if processed_items_count == total_items_count:
+                                 cur.execute("""
+                                     SELECT r.duration
+                                     FROM inventory.transfers t
+                                     JOIN catalog.warehouses fw ON t.from_warehouse_id = fw.id
+                                     JOIN catalog.warehouses tw ON t.to_warehouse_id = tw.id
+                                     JOIN inventory.routes r ON fw.city_id = r.from_city_id AND tw.city_id = r.to_city_id
+                                     WHERE t.id = %s;
+                                 """, (tid,))
+                                 route_duration_row = cur.fetchone()
+                                 duration = route_duration_row[0] if route_duration_row else datetime.timedelta(hours=24)
+
+                                 arriving_at = datetime.datetime.now() + duration
+
+                                 cur.execute("""
+                                     UPDATE inventory.transfers
+                                     SET status = 'in_transit', arriving_at = %s, started_at = COALESCE(started_at, NOW())
+                                     WHERE id = %s;
+                                 """, (arriving_at, tid))
+                                 console.print(f"[green]Все позиции отгружены. Статус трансфера #{tid} изменен на 'in_transit'. Ожидаем прибытие {arriving_at}.[/green]")
+                             else:
+                                 console.print(f"[green]Статус трансфера #{tid} не изменен, так как не все позиции отгружены.[/green]")
+                             return
+
+                        item_id = item_row[0]
+                        item_name = item_row[10]
+                        item_sku = item_row[11]
+                        item_quantity = item_row[3]
+
+                        console.print(f"Обнаружена позиция для отгрузки: #{item_id} - {item_quantity} x {item_name} (SKU: {item_sku})")
+                        confirm_ship = yes_no_choice(f"Отгрузить позицию #{item_id} ({item_quantity} x {item_name})?")
+
+                        if not confirm_ship:
+                            console.print("[yellow]Отгрузка позиции #{item_id} отменена. Продолжаем обработку других позиций.[/yellow]")
+                            continue
 
                         cur.execute("""
-                            UPDATE inventory.transfers
-                            SET status = 'in_transit', arriving_at = %s, started_at = COALESCE(started_at, NOW())
-                            WHERE id = %s;
-                        """, (arriving_at, tid))
-                        console.print(f"[green]Все позиции отгружены. Статус трансфера #{tid} изменен на 'in_transit'. Ожидаем прибытие {arriving_at}.[/green]")
-                    else:
-                        console.print(f"[green]Отгружено {rows_affected} позиций из {total_items_count} в трансфере #{tid}.[/green]")
+                            UPDATE inventory.transfer_items
+                            SET status = 'shipped', shipped_at = NOW()
+                            WHERE id = %s AND status = 'planned';
+                        """, (item_id,))
 
-    except Exception as e:
-        render_error(f"Ошибка при отгрузке трансфера: {e}")
+                        rows_affected = cur.rowcount
+                        if rows_affected != 1:
+                            console.print(f"[yellow]Позиция #{item_id} уже была отгружена другим работником.[/yellow]")
+                            continue
+
+                        console.print(f"[green]Позиция #{item_id} отгружена.[/green]")
+
+        except Exception as e:
+            render_error(f"Ошибка при отгрузке позиции трансфера: {e}")
+            return
+
 
 @command("check transfers", "проверяет, нет ли прибывших трансферов", CATEGORY_INVENTORY_READ, [ROLE_WORKER])
 def check_transfers() -> None:
@@ -258,6 +274,7 @@ def check_transfers() -> None:
     except Exception as e:
         render_error(f"Ошибка при проверке трансферов: {e}")
 
+
 @command("receive transfer", "разгрузка трансфера (изменение статуса позиций и трансфера)", CATEGORY_INVENTORY_READ, [ROLE_WORKER])
 def receive_transfer(_id: str) -> None:
     try:
@@ -272,41 +289,59 @@ def receive_transfer(_id: str) -> None:
         return
 
     conn = get_conn()
-    try:
-        with conn:
-            with conn.transaction():
-                with conn.cursor(row_factory=Row) as cur:
-                    cur.execute("""
-                        SELECT id, status, to_warehouse_id
-                        FROM inventory.transfers
-                        WHERE id = %s AND status = 'arrived' AND to_warehouse_id = %s
-                        FOR UPDATE; -- Блокируем строку
-                    """, (tid, worker_warehouse_id))
-                    transfer_row = cur.fetchone()
-                    if not transfer_row:
-                        render_error(f"Трансфер #{tid} не найден, не в статусе 'arrived' или не на ваш склад.")
-                        return
+    while True:
+        try:
+            with conn:
+                with conn.transaction():
+                    with conn.cursor(row_factory=Row) as cur:
+                        cur.execute("""
+                            SELECT id, status, to_warehouse_id
+                            FROM inventory.transfers
+                            WHERE id = %s AND status = 'arrived' AND to_warehouse_id = %s
+                            FOR UPDATE;
+                        """, (tid, worker_warehouse_id))
+                        transfer_row = cur.fetchone()
+                        if not transfer_row:
+                            render_error(f"Трансфер #{tid} не найден, не в статусе 'arrived' или не на ваш склад.")
+                            return
 
-                    items = _get_transfer_items_by_transfer_id_and_status(tid, 'shipped')
-                    if not items:
-                         console.print(f"[green]Все позиции в трансфере #{tid} уже разгружены.[/green]")
-                         cur.execute("UPDATE inventory.transfers SET status = 'received', received_at = NOW() WHERE id = %s;", (tid,))
-                         console.print(f"[green]Статус трансфера #{tid} изменен на 'received'.[/green]")
-                         return
+                        cur.execute("""
+                            SELECT ti.id, ti.transfer_id, ti.product_id, ti.quantity, ti.requested_by, ti.reserve_id, ti.status, ti.created_at, ti.shipped_at, ti.received_at,
+                                   p.sku, p.name
+                            FROM inventory.transfer_items ti
+                            JOIN catalog.products p ON ti.product_id = p.id
+                            WHERE transfer_id = %s AND status = 'shipped'
+                            ORDER BY ti.id
+                            LIMIT 1
+                            FOR UPDATE;
+                        """, (tid,))
+                        item_row = cur.fetchone()
+                        if not item_row:
+                             console.print(f"[green]Все позиции в трансфере #{tid} уже разгружены.[/green]")
+                             cur.execute("SELECT COUNT(*) FROM inventory.transfer_items WHERE transfer_id = %s AND status = 'received';", (tid,))
+                             received_items_count = cur.fetchone()[0]
+                             total_items_count = len(_get_transfer_items_by_transfer_id(tid))
 
-                    console.print(f"Обработка разгрузки для трансфера #{tid}. Найдено {len(items)} позиций со статусом 'shipped'.")
+                             if received_items_count == total_items_count:
+                                 cur.execute("UPDATE inventory.transfers SET status = 'received', received_at = NOW() WHERE id = %s;", (tid,))
+                                 console.print(f"[green]Все позиции разгружены. Статус трансфера #{tid} изменен на 'received'.[/green]")
+                             else:
+                                 console.print(f"[green]Статус трансфера #{tid} не изменен, так как не все позиции разгружены.[/green]")
+                             return
 
-                    confirm_receive = yes_no_choice(f"Разгрузить все {len(items)} позиции из трансфера #{tid}?")
-                    if not confirm_receive:
-                        console.print("[yellow]Разгрузка отменена.[/yellow]")
-                        return
+                        item_id = item_row[0]
+                        item_product_id = item_row[2]
+                        item_quantity = item_row[3]
+                        item_reserve_id = item_row[5]
+                        item_name = item_row[11]
 
-                    item_ids_to_receive = []
-                    for item in items:
-                        item_id = item[0]
-                        product_id = item[2]
-                        quantity = item[3]
-                        reserve_id = item[5]
+                        console.print(f"Обнаружена позиция для разгрузки: #{item_id} - {item_quantity} x {item_name}")
+
+                        confirm_receive = yes_no_choice(f"Разгрузить позицию #{item_id} ({item_quantity} x {item_name})?")
+
+                        if not confirm_receive:
+                            console.print("[yellow]Разгрузка позиции #{item_id} отменена. Продолжаем обработку других позиций.[/yellow]")
+                            continue
 
                         cur.execute("""
                             UPDATE inventory.transfer_items
@@ -315,49 +350,41 @@ def receive_transfer(_id: str) -> None:
                         """, (item_id,))
                         rows_affected_ti = cur.rowcount
                         if rows_affected_ti != 1:
-                            render_error(f"Не удалось разгрузить позицию #{item_id}. Возможно, другой работник уже обработал её.")
-                            return
-                        item_ids_to_receive.append(item_id)
+                            console.print(f"[yellow]Позиция #{item_id} уже была разгружена другим работником.[/yellow]")
+                            continue
 
-                        if reserve_id:
-                            cur.execute("SELECT order_id, product_id, quantity, warehouse_id FROM inventory.reserves WHERE id = %s;", (reserve_id,))
+                        if item_reserve_id:
+                            cur.execute("SELECT order_id, product_id, quantity, warehouse_id FROM inventory.reserves WHERE id = %s FOR UPDATE;", (item_reserve_id,))
                             reserve_row = cur.fetchone()
                             if reserve_row:
                                 res_order_id, res_product_id, res_quantity, res_warehouse_id = reserve_row
-                                target_warehouse_for_reserve_item = res_warehouse_id
                                 cur.execute("""
                                     INSERT INTO inventory.stock (warehouse_id, product_id, quantity)
                                     VALUES (%s, %s, %s)
                                     ON CONFLICT (warehouse_id, product_id) DO UPDATE SET quantity = inventory.stock.quantity + %s;
-                                """, (target_warehouse_for_reserve_item, product_id, quantity, quantity))
-                                console.print(f"[blue]Товар из позиции #{item_id} (резерв #{reserve_id}) добавлен в stock склада #{target_warehouse_for_reserve_item}.[/blue]")
+                                """, (res_warehouse_id, item_product_id, item_quantity, item_quantity))
+                                console.print(f"[blue]Товар из позиции #{item_id} (резерв #{item_reserve_id}) добавлен в stock склада #{res_warehouse_id}.[/blue]")
                             else:
                                 cur.execute("""
                                     INSERT INTO inventory.stock (warehouse_id, product_id, quantity)
                                     VALUES (%s, %s, %s)
                                     ON CONFLICT (warehouse_id, product_id) DO UPDATE SET quantity = inventory.stock.quantity + %s;
-                                """, (worker_warehouse_id, product_id, quantity, quantity))
-                                console.print(f"[blue]Товар из позиции #{item_id} (без резерва) добавлен в stock склада #{worker_warehouse_id}.[/blue]")
+                                """, (worker_warehouse_id, item_product_id, item_quantity, item_quantity))
+                                console.print(f"[blue]Товар из позиции #{item_id} (резерв не найден) добавлен в stock склада #{worker_warehouse_id}.[/blue]")
                         else:
                             cur.execute("""
                                 INSERT INTO inventory.stock (warehouse_id, product_id, quantity)
                                 VALUES (%s, %s, %s)
                                 ON CONFLICT (warehouse_id, product_id) DO UPDATE SET quantity = inventory.stock.quantity + %s;
-                            """, (worker_warehouse_id, product_id, quantity, quantity))
+                            """, (worker_warehouse_id, item_product_id, item_quantity, item_quantity))
                             console.print(f"[blue]Товар из позиции #{item_id} (без резерва) добавлен в stock склада #{worker_warehouse_id}.[/blue]")
 
-                    cur.execute("SELECT COUNT(*) FROM inventory.transfer_items WHERE transfer_id = %s AND status = 'received';", (tid,))
-                    received_items_count = cur.fetchone()[0]
-                    total_items_count = len(_get_transfer_items_by_transfer_id(tid))
+                        console.print(f"[green]Позиция #{item_id} разгружена и обработана.[/green]")
 
-                    if received_items_count == total_items_count:
-                        cur.execute("UPDATE inventory.transfers SET status = 'received', received_at = NOW() WHERE id = %s;", (tid,))
-                        console.print(f"[green]Все позиции разгружены. Статус трансфера #{tid} изменен на 'received'.[/green]")
-                    else:
-                        console.print(f"[green]Разгружено {len(item_ids_to_receive)} позиций из {total_items_count} в трансфере #{tid}.[/green]")
+        except Exception as e:
+            render_error(f"Ошибка при разгрузке позиции трансфера: {e}")
+            return
 
-    except Exception as e:
-        render_error(f"Ошибка при разгрузке трансфера: {e}")
 
 @command("ship delivery", "отгрузка доставки заказа", CATEGORY_INVENTORY_READ, [ROLE_WORKER])
 def ship_delivery(_order_id: str) -> None:

@@ -449,9 +449,9 @@ def process_order(_id: str) -> None:
         return
 
     conn = get_conn()
-    with conn.cursor(row_factory=Row) as cur:
-        cur.execute("SELECT status, warehouses_id FROM sales.orders WHERE id = %s", (oid,))
-        order_row = cur.fetchone()
+    with conn.cursor(row_factory=Row) as cur_check:
+        cur_check.execute("SELECT status, warehouses_id FROM sales.orders WHERE id = %s", (oid,))
+        order_row = cur_check.fetchone()
         if not order_row:
             render_error(f"Заказ #{oid} не найден.")
             return
@@ -475,6 +475,17 @@ def process_order(_id: str) -> None:
 
         console.print(f"\n--- Обработка позиции: {item_name} (SKU: {item_sku}), количество: {item_qty_needed} ---")
 
+        with conn.cursor(row_factory=Row) as cur_check_reserve:
+            cur_check_reserve.execute("""
+                SELECT id, quantity, status FROM inventory.reserves
+                WHERE order_id = %s AND product_id = %s AND status IN ('reserved', 'pending_transfer', 'fulfilled')
+            """, (oid, item_pid))
+            existing_reserves = cur_check_reserve.fetchall()
+
+        if existing_reserves:
+            console.print(f"[yellow]Для этой позиции уже существуют резервы: {[r[0] for r in existing_reserves]}. Пропуск обработки.[/yellow]")
+            continue
+
         with conn.cursor(row_factory=Row) as cur_stock:
             cur_stock.execute("SELECT quantity FROM inventory.stock WHERE warehouse_id = %s AND product_id = %s", (target_warehouse_id, item_pid))
             stock_row = cur_stock.fetchone()
@@ -495,18 +506,41 @@ def process_order(_id: str) -> None:
         )
 
         if selected_action == "reserve":
-            source_warehouse_id = target_warehouse_id
             try:
                 with conn:
                     with conn.transaction():
-                        with conn.cursor() as cur_reserve:
+                        with conn.cursor(row_factory=Row) as cur_reserve:
+                            cur_reserve.execute("SELECT quantity FROM inventory.stock WHERE warehouse_id = %s AND product_id = %s FOR UPDATE;", (target_warehouse_id, item_pid))
+                            stock_row_locked = cur_reserve.fetchone()
+                            available_qty_locked = stock_row_locked[0] if stock_row_locked else 0
+
+                            if available_qty_locked < item_qty_needed:
+                                raise ValueError(f"Недостаточно товара '{item_name}' на складе #{target_warehouse_id} для резерва. Доступно: {available_qty_locked}, требуется: {item_qty_needed}.")
+
+                            cur_reserve.execute("""
+                                SELECT id, quantity, status FROM inventory.reserves
+                                WHERE order_id = %s AND product_id = %s AND status IN ('reserved', 'pending_transfer', 'fulfilled')
+                            """, (oid, item_pid))
+                            existing_reserves_in_tx = cur_reserve.fetchall()
+                            if existing_reserves_in_tx:
+                                raise ValueError(f"Резерв для позиции {item_name} в заказе #{oid} был создан другим процессом.")
+
+                            source_warehouse_id = target_warehouse_id
                             cur_reserve.execute("""
                                 INSERT INTO inventory.reserves (order_id, product_id, quantity, warehouse_id, status)
                                 VALUES (%s, %s, %s, %s, 'reserved')
                                 RETURNING id;
                             """, (oid, item_pid, item_qty_needed, source_warehouse_id))
                             reserve_id = cur_reserve.fetchone()[0]
+
+                            cur_reserve.execute("""
+                                UPDATE inventory.stock SET quantity = quantity - %s WHERE warehouse_id = %s AND product_id = %s;
+                            """, (item_qty_needed, target_warehouse_id, item_pid))
+
                             console.print(f"[green]Создан резерв #{reserve_id} для {item_qty_needed} x {item_name} на складе #{source_warehouse_id}.[/green]")
+
+            except ValueError as ve:
+                render_error(f"Ошибка при резервировании: {ve}")
             except Exception as e:
                 render_error(f"Ошибка при создании резерва: {e}")
 
@@ -539,31 +573,38 @@ def process_order(_id: str) -> None:
 
             try:
                 source_wid = int(selected_source)
-                from src.helpers import _get_or_create_planned_transfer
-                transfer = _get_or_create_planned_transfer(source_wid, target_warehouse_id)
-                if not transfer:
-                    render_error("Не удалось получить или создать перемещение.")
-                    continue
-                tid = transfer.id
-
                 with conn:
                     with conn.transaction():
-                        with conn.cursor() as cur_add_item:
-                            cur_add_item.execute("SELECT 1 FROM inventory.transfers WHERE id = %s FOR UPDATE;", (tid,))
-                            cur_add_item.execute("SELECT 1 FROM inventory.transfer_items WHERE transfer_id = %s FOR UPDATE;", (tid,))
-                            cur_add_item.execute("SELECT 1 FROM inventory.stock WHERE warehouse_id = %s AND product_id = %s FOR UPDATE;", (source_wid, item_pid))
-
-                            cur_add_item.execute("SELECT quantity FROM inventory.stock WHERE warehouse_id = %s AND product_id = %s;", (source_wid, item_pid))
+                        with conn.cursor(row_factory=Row) as cur_add_item:
+                            cur_add_item.execute("SELECT quantity FROM inventory.stock WHERE warehouse_id = %s AND product_id = %s FOR UPDATE;", (source_wid, item_pid))
                             stock_row = cur_add_item.fetchone()
                             if not stock_row or stock_row[0] < item_qty_needed:
-                                render_error(f"Недостаточно товара '{item_name}' на складе отправления #{source_wid}.")
-                                continue
+                                raise ValueError(f"Недостаточно товара '{item_name}' на складе отправления #{source_wid} для перемещения. Доступно: {stock_row[0] if stock_row else 0}, требуется: {item_qty_needed}.")
+
+                            cur_add_item.execute("""
+                                SELECT id, quantity, status FROM inventory.reserves
+                                WHERE order_id = %s AND product_id = %s AND status IN ('reserved', 'pending_transfer', 'fulfilled')
+                            """, (oid, item_pid))
+                            existing_reserves_in_tx = cur_add_item.fetchall()
+                            if existing_reserves_in_tx:
+                                raise ValueError(f"Резерв для позиции {item_name} в заказе #{oid} был создан другим процессом.")
+
+                            from src.helpers import _get_or_create_planned_transfer
+                            transfer = _get_or_create_planned_transfer(source_wid, target_warehouse_id)
+                            if not transfer:
+                                raise ValueError("Не удалось получить или создать перемещение.")
+                            tid = transfer.id
+
+                            cur_add_item.execute("SELECT status FROM inventory.transfers WHERE id = %s FOR UPDATE;", (tid,))
+                            transfer_row = cur_add_item.fetchone()
+                            if not transfer_row or transfer_row[0] != 'planned':
+                                raise ValueError(f"Трансфер #{tid} не найден или не в статусе 'planned'.")
 
                             cur_add_item.execute("""
                                 INSERT INTO inventory.reserves (order_id, product_id, quantity, warehouse_id, status)
-                                VALUES (%s, %s, %s, %s, 'pending_transfer')
+                                VALUES (%s, %s, 0, %s, 'pending_transfer') -- status может быть 'pending_transfer'
                                 RETURNING id;
-                            """, (oid, item_pid, item_qty_needed, target_warehouse_id))
+                            """, (oid, item_pid, target_warehouse_id))
                             reserve_id_for_transfer = cur_add_item.fetchone()[0]
 
                             cur_add_item.execute("""
@@ -577,6 +618,8 @@ def process_order(_id: str) -> None:
 
                             console.print(f"[green]Создан резерв #{reserve_id_for_transfer} и добавлена позиция в трансфер #{tid} для {item_qty_needed} x {item_name}.[/green]")
 
+            except ValueError as ve:
+                render_error(f"Ошибка при создании перемещения: {ve}")
             except Exception as e:
                 render_error(f"Ошибка при создании перемещения: {e}")
 
@@ -585,5 +628,4 @@ def process_order(_id: str) -> None:
             continue
 
     console.print(f"\n[green]Обработка заказа #{oid} завершена (частично или полностью).[/green]")
-
 
