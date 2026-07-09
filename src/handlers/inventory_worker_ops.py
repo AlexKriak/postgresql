@@ -359,18 +359,23 @@ def receive_transfer(_id: str) -> None:
                             if reserve_row:
                                 res_order_id, res_product_id, res_quantity, res_warehouse_id = reserve_row
                                 cur.execute("""
+                                    UPDATE inventory.reserves SET quantity = quantity + %s WHERE id = %s;
+                                """, (item_quantity, item_reserve_id))
+
+                                cur.execute("""
                                     INSERT INTO inventory.stock (warehouse_id, product_id, quantity)
                                     VALUES (%s, %s, %s)
                                     ON CONFLICT (warehouse_id, product_id) DO UPDATE SET quantity = inventory.stock.quantity + %s;
                                 """, (res_warehouse_id, item_product_id, item_quantity, item_quantity))
-                                console.print(f"[blue]Товар из позиции #{item_id} (резерв #{item_reserve_id}) добавлен в stock склада #{res_warehouse_id}.[/blue]")
+
+                                console.print(f"[blue]Товар из позиции #{item_id} (резерв #{item_reserve_id}) добавлен в резерв и в stock склада #{res_warehouse_id}.[/blue]")
                             else:
                                 cur.execute("""
                                     INSERT INTO inventory.stock (warehouse_id, product_id, quantity)
                                     VALUES (%s, %s, %s)
                                     ON CONFLICT (warehouse_id, product_id) DO UPDATE SET quantity = inventory.stock.quantity + %s;
                                 """, (worker_warehouse_id, item_product_id, item_quantity, item_quantity))
-                                console.print(f"[blue]Товар из позиции #{item_id} (резерв не найден) добавлен в stock склада #{worker_warehouse_id}.[/blue]")
+                                console.print(f"[blue]Товар из позиции #{item_id} (резерв #{item_reserve_id} не найден) добавлен в stock склада #{worker_warehouse_id}.[/blue]")
                         else:
                             cur.execute("""
                                 INSERT INTO inventory.stock (warehouse_id, product_id, quantity)

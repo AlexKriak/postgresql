@@ -467,24 +467,25 @@ def process_order(_id: str) -> None:
         console.print(f"[yellow]В заказе #{oid} нет позиций.[/yellow]")
         return
 
+    with conn.cursor(row_factory=Row) as cur_all_reserves:
+        cur_all_reserves.execute("""
+            SELECT product_id FROM inventory.reserves
+            WHERE order_id = %s AND status IN ('reserved', 'pending_transfer', 'fulfilled')
+        """, (oid,))
+        processed_items_pids = set(row[0] for row in cur_all_reserves.fetchall())
+
     for item in order_items:
         item_pid = item.product_id
         item_qty_needed = item.quantity
         item_name = item.product_name
         item_sku = item.product_sku
 
-        console.print(f"\n--- Обработка позиции: {item_name} (SKU: {item_sku}), количество: {item_qty_needed} ---")
-
-        with conn.cursor(row_factory=Row) as cur_check_reserve:
-            cur_check_reserve.execute("""
-                SELECT id, quantity, status FROM inventory.reserves
-                WHERE order_id = %s AND product_id = %s AND status IN ('reserved', 'pending_transfer', 'fulfilled')
-            """, (oid, item_pid))
-            existing_reserves = cur_check_reserve.fetchall()
-
-        if existing_reserves:
-            console.print(f"[yellow]Для этой позиции уже существуют резервы: {[r[0] for r in existing_reserves]}. Пропуск обработки.[/yellow]")
+        if item_pid in processed_items_pids:
+            console.print(f"\n--- Позиция: {item_name} (SKU: {item_sku}), количество: {item_qty_needed} ---")
+            console.print(f"[yellow]Для этой позиции уже существуют резервы. Пропуск обработки.[/yellow]")
             continue
+
+        console.print(f"\n--- Обработка позиции: {item_name} (SKU: {item_sku}), количество: {item_qty_needed} ---")
 
         with conn.cursor(row_factory=Row) as cur_stock:
             cur_stock.execute("SELECT quantity FROM inventory.stock WHERE warehouse_id = %s AND product_id = %s", (target_warehouse_id, item_pid))
@@ -602,7 +603,7 @@ def process_order(_id: str) -> None:
 
                             cur_add_item.execute("""
                                 INSERT INTO inventory.reserves (order_id, product_id, quantity, warehouse_id, status)
-                                VALUES (%s, %s, 0, %s, 'pending_transfer') -- status может быть 'pending_transfer'
+                                VALUES (%s, %s, 0, %s, 'pending_transfer')
                                 RETURNING id;
                             """, (oid, item_pid, target_warehouse_id))
                             reserve_id_for_transfer = cur_add_item.fetchone()[0]
@@ -628,4 +629,3 @@ def process_order(_id: str) -> None:
             continue
 
     console.print(f"\n[green]Обработка заказа #{oid} завершена (частично или полностью).[/green]")
-
