@@ -113,7 +113,7 @@ def _get_transfer_by_id(tid: int) -> Optional[Transfer]:
 def _get_or_create_planned_transfer(from_warehouse_id: int, to_warehouse_id: int) -> Optional[Transfer]:
     conn = get_conn()
     with conn:
-        with conn.transaction(isolation_level="SERIALIZABLE"):
+        with conn.transaction(isolation_level="REPEATABLE READ"):
             with conn.cursor(row_factory=class_row(Transfer)) as cur:
                 cur.execute("""
                     SELECT t.id, t.from_warehouse_id, t.to_warehouse_id, t.status,
