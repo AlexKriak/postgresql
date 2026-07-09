@@ -460,3 +460,4 @@ def ship_delivery(_order_id: str) -> None:
 
     except Exception as e:
         render_error(f"Ошибка при отгрузке доставки: {e}")
+
