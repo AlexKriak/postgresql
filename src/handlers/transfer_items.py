@@ -245,12 +245,11 @@ def add_transfer_item() -> None:
                             return
                         tid = transfer.id
 
-                        cur_atomic.execute("SELECT status FROM inventory.transfers WHERE id = %s FOR UPDATE;", (tid,))
+                        cur_atomic.execute("SELECT status FROM inventory.transfers WHERE id = %s FOR SHARE;", (tid,))
                         transfer_row = cur_atomic.fetchone()
                         if not transfer_row or transfer_row[0] != 'planned':
                             raise ValueError(f"Перемещение #{tid} не найдено или не в статусе planned.")
 
-                        cur_atomic.execute("SELECT 1 FROM inventory.transfer_items WHERE transfer_id = %s FOR UPDATE;", (tid,))
                         cur_atomic.execute(
                             "SELECT id, quantity FROM inventory.transfer_items"
                             "WHERE transfer_id = %s AND product_id = %s AND requested_by = %s AND status = 'planned'"
@@ -378,12 +377,11 @@ def remove_transfer_item() -> None:
             with conn:
                 with conn.transaction():
                     with conn.cursor() as cur_atomic:
-                        cur_atomic.execute("SELECT status FROM inventory.transfers WHERE id = %s FOR UPDATE;", (tid,))
+                        cur_atomic.execute("SELECT status FROM inventory.transfers WHERE id = %s FOR SHARE;", (tid,))
                         transfer_row = cur_atomic.fetchone()
                         if not transfer_row or transfer_row[0] != 'planned':
                             raise ValueError(f"Перемещение #{tid} не найдено или не в статусе planned.")
 
-                        cur_atomic.execute("SELECT 1 FROM inventory.transfer_items WHERE transfer_id = %s FOR UPDATE;", (tid,))
                         cur_atomic.execute("""
                              SELECT id, quantity FROM inventory.transfer_items
                              WHERE id = %s AND transfer_id = %s AND requested_by = %s AND status = 'planned'
